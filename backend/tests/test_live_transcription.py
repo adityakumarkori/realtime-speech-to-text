@@ -16,11 +16,13 @@ from poc.transcripts import TranscriptEvent
 class FakeTranscriptService:
     def __init__(self):
         self.recorded: list[tuple[uuid.UUID, int, str]] = []
+        self.language_codes: list[str | None] = []
 
     def record_final_segment(
         self, *, session_id: uuid.UUID, sequence: int, text: str, language_code: str | None = None
     ) -> Transcript:
         self.recorded.append((session_id, sequence, text))
+        self.language_codes.append(language_code)
         return Transcript(
             id=len(self.recorded),
             session_id=session_id,
@@ -196,6 +198,7 @@ async def test_runner_successful_session(monkeypatch, runner, fake_transcript_se
     assert summary.interim_count == 1
     assert summary.final_count == 1
     assert fake_transcript_service.recorded == [(session_id, 0, "final text")]
+    assert fake_transcript_service.language_codes == ["hi-IN,en-IN"]
 
 
 async def test_runner_database_unconfigured_raises_error(

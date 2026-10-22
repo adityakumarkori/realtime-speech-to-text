@@ -68,7 +68,7 @@ class TranscriptService:
     def list_sessions(
         self,
         *,
-        limit: int = 50,
+        limit: int = 10,
         offset: int = 0,
         search: str | None = None,
     ) -> SessionPage:

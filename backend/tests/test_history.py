@@ -83,7 +83,7 @@ def test_list_sessions_returns_metadata_and_orders_by_latest(
     assert response.status_code == 200
     payload = response.json()
     assert payload["total"] == 2
-    assert payload["limit"] == 50
+    assert payload["limit"] == 10
     assert payload["offset"] == 0
     assert [item["session_id"] for item in payload["sessions"]] == [
         str(second_session),
@@ -151,7 +151,7 @@ def test_list_sessions_search_pagination_and_empty_state(
     assert empty_response.json() == {
         "sessions": [],
         "total": 0,
-        "limit": 50,
+        "limit": 10,
         "offset": 0,
     }
 
@@ -496,7 +496,7 @@ def test_live_final_segment_appears_in_history(
 
     with TestClient(app) as client:
         with client.websocket_connect(
-            "/ws/transcribe?language_codes=en-IN"
+            "/ws/transcribe?language_codes=hi-IN,en-IN"
         ) as websocket:
             ready = websocket.receive_json()
             assert ready["type"] == "ready"
@@ -523,11 +523,15 @@ def test_live_final_segment_appears_in_history(
         assert payload["sessions"][0]["preview"] == (
             "Integrated final segment."
         )
+        assert payload["sessions"][0]["language_codes"] == [
+            "hi-IN",
+            "en-IN",
+        ]
 
         detail = client.get(
             f"/api/transcription-sessions/{session_id}"
         )
         assert detail.status_code == 200
-        assert detail.json()["segments"][0]["text"] == (
-            "Integrated final segment."
-        )
+        segment = detail.json()["segments"][0]
+        assert segment["text"] == "Integrated final segment."
+        assert segment["language_code"] == "hi-IN,en-IN"

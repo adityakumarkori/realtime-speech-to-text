@@ -95,6 +95,7 @@ class LiveTranscriptionRunner:
         sequence = 0
         final_count = 0
         interim_count = 0
+        selected_language = ",".join(language_codes) or None
 
         async def handle_event(event: TranscriptEvent) -> None:
             nonlocal sequence, final_count, interim_count
@@ -107,7 +108,7 @@ class LiveTranscriptionRunner:
                         session_id=session_id,
                         sequence=sequence,
                         text=event.text,
-                        language_code=None,
+                        language_code=selected_language,
                     )
                 except TranscriptValidationError as exc:
                     raise LiveSessionError(

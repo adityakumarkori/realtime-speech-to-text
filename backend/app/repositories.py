@@ -40,6 +40,10 @@ def _preview(text: str) -> str:
     return f"{text[: PREVIEW_LENGTH - 3]}..."
 
 
+def _split_language_codes(value: str) -> list[str]:
+    return [code.strip() for code in value.split(",") if code.strip()]
+
+
 class TranscriptRepository:
     def add(
         self,
@@ -189,7 +193,10 @@ class TranscriptRepository:
         )
         languages: dict[uuid.UUID, list[str]] = {}
         for session_id, language_code in session.execute(language_statement):
-            languages.setdefault(session_id, []).append(language_code)
+            session_languages = languages.setdefault(session_id, [])
+            for code in _split_language_codes(language_code):
+                if code not in session_languages:
+                    session_languages.append(code)
         return previews, languages
 
     def update_text(

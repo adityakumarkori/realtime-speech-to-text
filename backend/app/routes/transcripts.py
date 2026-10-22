@@ -70,7 +70,7 @@ def _service(request: Request) -> TranscriptService:
 def list_transcription_sessions(
     request: Request,
     q: str | None = Query(default=None, max_length=200),
-    limit: int = Query(default=50, ge=1, le=100),
+    limit: int = Query(default=10, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ) -> SessionListResponse:
     page = _service(request).list_sessions(

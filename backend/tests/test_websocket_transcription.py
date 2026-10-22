@@ -21,6 +21,7 @@ from poc.transcripts import TranscriptEvent
 class FakeTranscriptService:
     def __init__(self):
         self.recorded: list[tuple[uuid.UUID, int, str]] = []
+        self.language_codes: list[str | None] = []
 
     def record_final_segment(
         self,
@@ -31,6 +32,7 @@ class FakeTranscriptService:
         language_code: str | None = None,
     ) -> Transcript:
         self.recorded.append((session_id, sequence, text))
+        self.language_codes.append(language_code)
         return Transcript(
             id=len(self.recorded),
             session_id=session_id,
@@ -389,7 +391,9 @@ def test_websocket_persists_final_segment(client_factory, monkeypatch):
     monkeypatch.setattr("app.live.run_transcription", fake_run_transcription)
     client = client_factory(runner)
 
-    with client.websocket_connect("/ws/transcribe") as ws:
+    with client.websocket_connect(
+        "/ws/transcribe?language_codes=hi-IN,en-IN"
+    ) as ws:
         ready = ws.receive_json()
         assert ready["type"] == "ready"
         session_id = uuid.UUID(ready["session_id"])
@@ -407,6 +411,7 @@ def test_websocket_persists_final_segment(client_factory, monkeypatch):
         assert completed["final_count"] == 1
 
     assert service.recorded == [(session_id, 0, "persisted text")]
+    assert service.language_codes == ["hi-IN,en-IN"]
 
 
 def test_websocket_max_duration_completes(client, monkeypatch):
