@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from poc import gemini_live
 from poc.config import Settings
+from poc.transcripts import TranscriptEvent
 
 
 class FakeTypes:
@@ -119,3 +120,120 @@ def test_run_transcription_sends_audio_and_collects_transcripts(monkeypatch):
     assert client.aio.live.session.audio_end_calls == 1
     assert result.interim_count == 1
     assert result.final_transcripts == ("final text",)
+
+
+def test_run_transcription_on_ready_callback_invoked(monkeypatch):
+    monkeypatch.setattr(gemini_live, "_load_sdk", lambda: (FakeGenai, FakeTypes))
+    monkeypatch.setattr(gemini_live, "_print_event", lambda *_args: None)
+    monkeypatch.setattr(gemini_live, "FINAL_IDLE_SECONDS", 0)
+
+    ready_called = False
+
+    async def on_ready():
+        nonlocal ready_called
+        ready_called = True
+
+    audio_chunks = [b"a" * 3_200]
+
+    async def chunks():
+        for chunk in audio_chunks:
+            yield chunk
+
+    asyncio.run(
+        gemini_live.run_transcription(
+            settings=Settings(api_key="test-key", model="test-model"),
+            chunks=chunks(),
+            on_ready=on_ready,
+        )
+    )
+
+    assert ready_called
+
+
+def test_run_transcription_on_event_callback_invoked_for_interim_and_final(monkeypatch):
+    monkeypatch.setattr(gemini_live, "_load_sdk", lambda: (FakeGenai, FakeTypes))
+    monkeypatch.setattr(gemini_live, "_print_event", lambda *_args: None)
+    monkeypatch.setattr(gemini_live, "FINAL_IDLE_SECONDS", 0)
+
+    events: list[TranscriptEvent] = []
+
+    async def on_event(event: TranscriptEvent):
+        events.append(event)
+
+    audio_chunks = [b"a" * 3_200]
+
+    async def chunks():
+        for chunk in audio_chunks:
+            yield chunk
+
+    asyncio.run(
+        gemini_live.run_transcription(
+            settings=Settings(api_key="test-key", model="test-model"),
+            chunks=chunks(),
+            on_event=on_event,
+        )
+    )
+
+    assert len(events) == 2
+    assert events[0].kind == "interim"
+    assert events[0].text == "interim text"
+    assert events[1].kind == "final"
+    assert events[1].text == "final text"
+
+
+def test_run_transcription_on_event_callback_suppresses_cli_output(monkeypatch):
+    monkeypatch.setattr(gemini_live, "_load_sdk", lambda: (FakeGenai, FakeTypes))
+    monkeypatch.setattr(gemini_live, "FINAL_IDLE_SECONDS", 0)
+
+    printed: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        gemini_live,
+        "_print_event",
+        lambda kind, text: printed.append((kind, text)),
+    )
+
+    async def on_event(event: TranscriptEvent):
+        pass
+
+    async def chunks():
+        yield b"a" * 3_200
+
+    asyncio.run(
+        gemini_live.run_transcription(
+            settings=Settings(api_key="test-key", model="test-model"),
+            chunks=chunks(),
+            on_event=on_event,
+        )
+    )
+
+    assert printed == []
+
+
+def test_run_transcription_on_event_callback_failure_propagates(monkeypatch):
+    monkeypatch.setattr(gemini_live, "_load_sdk", lambda: (FakeGenai, FakeTypes))
+    monkeypatch.setattr(gemini_live, "_print_event", lambda *_args: None)
+    monkeypatch.setattr(gemini_live, "FINAL_IDLE_SECONDS", 0)
+
+    class CallbackError(Exception):
+        pass
+
+    async def on_event(event: TranscriptEvent):
+        raise CallbackError("callback failed")
+
+    audio_chunks = [b"a" * 3_200]
+
+    async def chunks():
+        for chunk in audio_chunks:
+            yield chunk
+
+    try:
+        asyncio.run(
+            gemini_live.run_transcription(
+                settings=Settings(api_key="test-key", model="test-model"),
+                chunks=chunks(),
+                on_event=on_event,
+            )
+        )
+        assert False, "expected CallbackError"
+    except CallbackError as exc:
+        assert str(exc) == "callback failed"

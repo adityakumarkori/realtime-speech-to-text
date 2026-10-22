@@ -11,5 +11,7 @@ htmlcov/
 recordings/
 *.wav
 *.pcm
+node_modules/
+frontend/dist/
 .DS_Store
 Thumbs.db
