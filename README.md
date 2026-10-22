@@ -105,6 +105,11 @@ Start the service from the project root:
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8000 --reload
 ```
 
+From `backend`, use `python -m uvicorn app.main:app --reload`. From
+`backend/app`, use `python -m uvicorn app.main:app --app-dir .. --reload`. Do not
+use `main:app` from `backend/app`, because that directory is not the package
+root.
+
 In another shell, verify the endpoint:
 
 ```powershell
@@ -130,7 +135,7 @@ backend/app/
   models.py        transcript table model
   repositories.py  transcript data access
   services.py      final-segment validation and persistence
-  logging.py       idempotent console logging setup
+  logging_config.py idempotent console logging setup
   errors.py        {"detail": "..."} error responses
   main.py          create_app(), lifespan, and the ASGI app
   routes/health.py GET /health
@@ -336,6 +341,8 @@ Documented Live transcription limits:
 - **Database connection or migration failure:** Verify PostgreSQL is running,
   the URL uses `postgresql+psycopg://`, the database exists, and migrations have
   been applied.
+- **`ModuleNotFoundError: No module named 'app'`:** Start Uvicorn from the
+  project root or `backend`, not from `backend/app` with `main:app`.
 - **`GEMINI_API_KEY is not set` / exit code 2:** Create `backend/.env` from
   `backend/.env.example` and add a real key, or set the environment variable.
 - **`No usable microphone at 16000 Hz...`:** Use `--list-devices`, make a

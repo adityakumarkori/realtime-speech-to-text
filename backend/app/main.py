@@ -12,7 +12,7 @@ from app.config import (
 )
 from app.database import Database
 from app.errors import register_exception_handlers
-from app.logging import configure_logging
+from app.logging_config import configure_logging
 from app.routes.health import router as health_router
 from app.services import TranscriptService
 
