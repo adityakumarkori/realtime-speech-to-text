@@ -4,10 +4,13 @@ Minimal backend for streaming microphone or pre-recorded audio to
 `gemini-3.5-transcribe-live` through the Gemini Live API. The Phase 0 CLI prints
 low-latency interim hypotheses and finalized transcript segments. Phase 1 adds a
 FastAPI service foundation with configuration, logging, error handling, and a
-health endpoint.
+health endpoint. Phase 2 adds PostgreSQL transcript persistence with SQLAlchemy
+and Alembic migrations.
 
-The project has no frontend, database, authentication, Docker setup, Gemini
-HTTP/WebSocket endpoints, or long-term storage.
+The project has no frontend, authentication, Docker setup, Gemini HTTP/WebSocket
+endpoints, or public transcript API. Finalized segments can be persisted
+through an internal service layer; the Phase 0 CLI does not write to the
+database.
 
 ## Verification status
 
@@ -40,6 +43,8 @@ audio or transcript content was written to the repository.
 - Python 3.12 (the version tested here)
 - A Gemini API key from Google AI Studio
 - A microphone, or a 16 kHz mono PCM16 WAV/raw PCM file
+- PostgreSQL 17 for transcript persistence and migrations; the FastAPI app
+  still starts without a database URL, but persistence is disabled
 
 ## Setup
 
@@ -52,19 +57,23 @@ python -m venv .venv
 Copy-Item backend\.env.example backend\.env
 ```
 
-Edit `backend/.env` and replace the placeholder:
+Edit `backend/.env` and replace the Gemini placeholder. Uncomment and set
+`DATABASE_URL` to enable transcript persistence:
 
 ```dotenv
 APP_ENV=development
 LOG_LEVEL=INFO
 GEMINI_API_KEY=your_real_key_here
 GEMINI_LIVE_MODEL=gemini-3.5-transcribe-live
+DATABASE_URL=postgresql+psycopg://user:password@localhost:5432/realtime_transcription
+# TEST_DATABASE_URL=postgresql+psycopg://user:password@localhost:5432/realtime_transcription_test
 ```
 
-`APP_ENV`, `LOG_LEVEL`, and `GEMINI_LIVE_MODEL` are optional. Never commit
-`backend/.env`; it is ignored by Git. The Gemini key is read only by the Phase 0
-CLI through `backend/poc/config.py`; the FastAPI app does not use or require
-it. Secrets are never printed.
+`APP_ENV`, `LOG_LEVEL`, `GEMINI_LIVE_MODEL`, and `DATABASE_URL` are optional.
+Never commit `backend/.env`; it is ignored by Git. The Gemini key is read only by
+the Phase 0 CLI through `backend/poc/config.py`; the FastAPI app does not use or
+require it. Database URLs are redacted and never printed. Secrets are never
+printed.
 
 If PyPI times out, retry the install. On this machine the install succeeded
 with a trusted HTTPS mirror for that command only:
@@ -73,12 +82,17 @@ with a trusted HTTPS mirror for that command only:
 .\.venv\Scripts\python.exe -m pip install --index-url https://pypi.tuna.tsinghua.edu.cn/simple -r backend\requirements.txt -r backend\requirements-dev.txt
 ```
 
-## FastAPI service (Phase 1)
+## FastAPI service (Phases 1-2)
 
-The Phase 1 application is a minimal FastAPI foundation. It exposes only
-`GET /health`; it does not import the Phase 0 POC, contact Gemini, or expose
-Gemini HTTP/WebSocket endpoints. A later phase will add the transcription
-service layer behind a stable API boundary.
+The application exposes only `GET /health`; it does not import the Phase 0 POC,
+contact Gemini, expose Gemini HTTP/WebSocket endpoints, or expose public
+transcript routes. Final transcript segments can be persisted through the
+internal `TranscriptService`, which uses one row per finalized segment.
+
+If `DATABASE_URL` is missing or blank, the app starts with a warning and
+transcript persistence disabled. If it is present, the database engine is
+created during application startup and disposed during shutdown. The health
+endpoint never connects to the database.
 
 Start the service from the project root:
 
@@ -100,22 +114,53 @@ Expected response:
 
 Stop the server with `Ctrl+C`. Interactive API documentation is available at
 `http://127.0.0.1:8000/docs` while it is running. The health check does not
-contact Gemini and does not require `GEMINI_API_KEY`.
+contact Gemini, require `GEMINI_API_KEY`, or require `DATABASE_URL`.
 
 The application package is organized as:
 
 ```text
 backend/app/
-  config.py        APP_ENV and LOG_LEVEL validation
+  config.py        app and redacted database configuration
+  database.py      engine, sessions, and transaction scope
+  models.py        transcript table model
+  repositories.py  transcript data access
+  services.py      final-segment validation and persistence
   logging.py       idempotent console logging setup
   errors.py        {"detail": "..."} error responses
-  main.py          create_app() and the ASGI app
+  main.py          create_app(), lifespan, and the ASGI app
   routes/health.py GET /health
 ```
 
 Unhandled errors return HTTP 500 with a generic
-`{"detail":"Internal server error"}` response. The server logs the HTTP method
-and path, but not request bodies, credentials, or transcript content.
+`{"detail":"Internal server error"}` response. Missing database configuration
+returns HTTP 503 if a database-backed operation reaches a request. The server
+logs the HTTP method and path, but not request bodies, credentials, database
+URLs, or transcript content.
+
+## Database migrations
+
+Alembic is the schema source of truth. The initial migration creates the
+`transcripts` table with UUID identifiers, sequence ordering, language codes,
+timestamps, uniqueness, and check constraints. The application does not call
+`create_all()` or run migrations automatically at startup.
+
+Set `DATABASE_URL` first, then run:
+
+```powershell
+.\.venv\Scripts\python.exe -m alembic -c backend\alembic.ini upgrade head
+```
+
+To inspect or roll back:
+
+```powershell
+.\.venv\Scripts\python.exe -m alembic -c backend\alembic.ini current
+.\.venv\Scripts\python.exe -m alembic -c backend\alembic.ini downgrade base
+```
+
+`TEST_DATABASE_URL` is separate and is used only by PostgreSQL tests. It must
+name a dedicated disposable test database and must differ from `DATABASE_URL`.
+PostgreSQL tests create and drop a randomly named schema; they do not modify the
+`public` schema. If `TEST_DATABASE_URL` is unset, those tests are skipped.
 
 ## Phase 0 CLI
 
@@ -174,7 +219,8 @@ Final 1: ...
 Final 2: ...
 ```
 
-No audio or transcript is written to disk.
+No audio or transcript is written to disk by the Phase 0 CLI. The CLI is not
+connected to the Phase 2 persistence service.
 
 ## Audio format
 
@@ -203,6 +249,8 @@ transcripts, then closes the session and microphone stream.
 | --- | --- | --- | --- |
 | `APP_ENV` | FastAPI app | No | `development` |
 | `LOG_LEVEL` | FastAPI app | No | `INFO` |
+| `DATABASE_URL` | FastAPI app and Alembic | No for app; yes for migrations | None |
+| `TEST_DATABASE_URL` | PostgreSQL tests | No; yes to run them | None |
 | `GEMINI_API_KEY` | Phase 0 CLI | Yes for the CLI | None |
 | `GEMINI_LIVE_MODEL` | Phase 0 CLI | No | `gemini-3.5-transcribe-live` |
 
@@ -211,10 +259,19 @@ lowercase. `LOG_LEVEL` accepts `CRITICAL`, `ERROR`, `WARNING`, `INFO`, or
 `DEBUG` and is normalized to uppercase. Invalid values stop startup with a
 clear configuration error.
 
-Process environment values take precedence over `backend/.env` for both the
-FastAPI app and the CLI. Missing, blank, and placeholder keys are rejected by
-the CLI before any network request. The FastAPI app does not require any Gemini
-setting.
+`DATABASE_URL` must use the installed psycopg driver, for example
+`postgresql+psycopg://user:password@host:5432/database`. A missing or blank
+value starts the app with persistence disabled. An invalid or placeholder value
+stops startup without printing the URL.
+
+`TEST_DATABASE_URL` is test-only. It must point to a dedicated disposable
+database whose name contains `test`, and it must differ from `DATABASE_URL`.
+The PostgreSQL tests use temporary schemas and remove only those schemas.
+
+Process environment values take precedence over `backend/.env` for the FastAPI
+app, Alembic, tests, and the CLI. Missing, blank, and placeholder Gemini keys are
+rejected by the CLI before any network request. The FastAPI app does not require
+any Gemini setting.
 
 Use `--language auto` (the default) to omit language hints and let the model
 detect language. `--language hi-IN,en-IN` supplies hints for Hindi and English
@@ -227,12 +284,23 @@ depends on automatic detection and must be tested with representative audio.
 .\.venv\Scripts\python.exe -m pytest
 ```
 
-The 53-test suite covers Phase 0 configuration validation and redaction,
-WAV/PCM validation, chunking, transcript event extraction, fake-session
-orchestration, CLI device validation, and the installed `google-genai` contract
-(version, config fields, response fields, send/receive methods, and async client
-context management). It also covers Phase 1 app configuration, `/health`, and
-HTTP/error responses. Tests do not call the network.
+The suite covers Phase 0 configuration validation and redaction, WAV/PCM
+validation, chunking, transcript event extraction, fake-session orchestration,
+CLI device validation, and the installed `google-genai` contract. It also covers
+Phase 1 app configuration, `/health`, and HTTP/error responses, plus Phase 2
+database configuration, degraded startup, persistence, constraints, and SQLite
+migration upgrades and downgrades. Tests do not call Gemini or other external
+network services.
+
+To run the optional PostgreSQL integration test, set a separate disposable test
+database:
+
+```powershell
+$env:TEST_DATABASE_URL = "postgresql+psycopg://user:password@localhost:5432/realtime_transcription_test"
+.\.venv\Scripts\python.exe -m pytest
+```
+
+The PostgreSQL test is skipped when `TEST_DATABASE_URL` is not set.
 
 ## Limits and cost
 
@@ -254,6 +322,15 @@ Documented Live transcription limits:
 
 ## Troubleshooting
 
+- **`DATABASE_URL is not set; transcript persistence is disabled`:** This is
+  expected without a database. Set `DATABASE_URL` and run the Alembic upgrade.
+- **`DATABASE_URL must be set to run database migrations`:** Set the URL before
+  running Alembic. The application itself can start without it.
+- **PostgreSQL test is skipped:** Set `TEST_DATABASE_URL` to a dedicated
+  disposable test database. Do not point it at a production database.
+- **Database connection or migration failure:** Verify PostgreSQL is running,
+  the URL uses `postgresql+psycopg://`, the database exists, and migrations have
+  been applied.
 - **`GEMINI_API_KEY is not set` / exit code 2:** Create `backend/.env` from
   `backend/.env.example` and add a real key, or set the environment variable.
 - **`No usable microphone at 16000 Hz...`:** Use `--list-devices`, make a

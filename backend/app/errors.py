@@ -4,10 +4,27 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.database import DatabaseUnavailableError
+
 logger = logging.getLogger(__name__)
 
 
 def register_exception_handlers(app: FastAPI) -> None:
+    @app.exception_handler(DatabaseUnavailableError)
+    async def database_unavailable_handler(
+        request: Request,
+        exc: DatabaseUnavailableError,
+    ) -> JSONResponse:
+        logger.warning(
+            "Database unavailable while processing %s %s",
+            request.method,
+            request.url.path,
+        )
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Database unavailable"},
+        )
+
     @app.exception_handler(StarletteHTTPException)
     async def http_exception_handler(
         request: Request,
