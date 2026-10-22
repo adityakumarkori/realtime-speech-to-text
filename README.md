@@ -7,22 +7,25 @@ FastAPI service foundation with configuration, logging, error handling, and a
 health endpoint. Phase 2 adds PostgreSQL transcript persistence with SQLAlchemy
 and Alembic migrations. Phase 3 adds an unauthenticated, local-development
 WebSocket endpoint that streams browser audio frames to Gemini Live and persists
-only finalized transcript segments.
+only finalized transcript segments. Phase 4 adds a React and TypeScript
+frontend that captures microphone audio, streams PCM16 frames over that
+WebSocket, displays interim captions, and shows persisted final segments.
 
-The project has no frontend, authentication, Docker setup, or public transcript
-CRUD API. The Phase 0 CLI and the Phase 3 WebSocket endpoint both use Gemini
-Live; neither is connected to the internal transcript persistence API for
-reading data back. Finalized segments are written through the internal service
-layer, and the Phase 0 CLI does not write to the database.
+The project has no authentication, Docker setup, or public transcript CRUD API.
+The Phase 0 CLI and the WebSocket endpoint both use Gemini Live; neither is
+connected to the internal transcript persistence API for reading data back.
+Finalized segments are written through the internal service layer, and the
+Phase 0 CLI does not write to the database.
 
 ## Verification status
 
 Checked on 2026-10-22 on Windows 11 with Python 3.12.7,
 `google-genai==2.32.0`, `fastapi==0.159.1`, `sqlalchemy==2.1.6`,
-`psycopg==3.3.6`, `alembic==1.20.1`, and `websockets==16.1.1`:
+`psycopg==3.3.6`, `alembic==1.20.1`, `websockets==16.1.1`, Node.js 24.14.0,
+npm 11.9.0, React 19.3.1, Vite 8.3.5, TypeScript 6.0.3, and Vitest 4.1.12:
 
-- 107 tests pass, covering the Phase 0 pipeline, a pinned-SDK contract test, a
-  fake-session orchestration test, CLI device validation, Phase 1 app
+- 107 backend tests pass, covering the Phase 0 pipeline, a pinned-SDK contract
+  test, a fake-session orchestration test, CLI device validation, Phase 1 app
   configuration, health, and error behavior, and Phase 2 persistence and
   migrations.
 - Phase 2 tests cover database configuration, degraded startup, transcript
@@ -34,6 +37,21 @@ Checked on 2026-10-22 on Windows 11 with Python 3.12.7,
   protocol errors, missing configuration, database failures, client stop,
   shortened session timeout, and disconnect cleanup. They use fake Gemini
   sessions and do not call the Gemini API or other external services.
+- 39 frontend Vitest tests pass, covering PCM16 conversion and clipping,
+  resampling from 8 kHz, 32 kHz, 44.1 kHz, and 48 kHz, exact frame construction,
+  partial and multi-frame buffering, WebSocket message parsing, malformed
+  messages, URL construction, session transitions, final ordering, and errors.
+- `npm run build` completes with TypeScript checks and a production Vite build.
+- The Vite development server returned the page with HTTP 200. `GET /health`
+  returned `{"status":"ok"}` both directly and through the Vite `/health` proxy.
+  A WebSocket handshake through the Vite `/ws` proxy reached the FastAPI app and
+  returned the expected `database_unavailable` error when persistence was
+  deliberately disabled for the check. No Gemini request was made.
+- The full live path (browser microphone → Gemini Live → PostgreSQL → UI) was
+  not exercised in this session. It requires an interactive microphone and a
+  configured application `DATABASE_URL`; neither was available in the automated
+  environment. The frontend protocol/audio logic is unit tested, not validated
+  against a live microphone.
 - A security check confirmed `backend/.env` is ignored and untracked, no real
   credentials or database URLs are committed, and PostgreSQL tests leave no
   temporary schemas behind.
@@ -64,6 +82,7 @@ audio or transcript content was written to the repository.
 ## Requirements
 
 - Python 3.12 (the version tested here)
+- Node.js 20.19 or newer and npm (tested with Node.js 24.14.0 and npm 11.9.0)
 - A Gemini API key from Google AI Studio for CLI or WebSocket transcription
 - A microphone, or a 16 kHz mono PCM16 WAV/raw PCM file
 - PostgreSQL 17 for transcript persistence, WebSocket streaming, and migrations;
@@ -80,6 +99,7 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt -r backend\requirements-dev.txt
 Copy-Item backend\.env.example backend\.env
+npm --prefix frontend install
 ```
 
 Edit `backend/.env` and replace the Gemini placeholder. Uncomment and set
@@ -145,8 +165,10 @@ Expected response:
 ```
 
 Stop the server with `Ctrl+C`. Interactive API documentation is available at
-`http://127.0.0.1:8000/docs` while it is running. The health check does not
-contact Gemini, require `GEMINI_API_KEY`, or require `DATABASE_URL`.
+`http://127.0.0.1:8000/docs` while it is running. It lists only the HTTP
+`GET /health` route because WebSocket routes are not part of OpenAPI. The health
+check does not contact Gemini, require `GEMINI_API_KEY`, or require
+`DATABASE_URL`.
 
 ### WebSocket transcription endpoint
 
@@ -211,6 +233,68 @@ is intended only for local development; bind it to `127.0.0.1` and do not expose
 it to untrusted networks. Audio and transcript content are not logged. There is
 no API for reading persisted transcripts.
 
+## Frontend (Phase 4)
+
+The `frontend/` app is a Vite, React, and TypeScript single-page interface for
+the WebSocket service. It captures mono microphone audio, resamples it to
+16 kHz, converts it to signed PCM16 little-endian, and sends 3,200-byte frames
+(100 ms). Interim captions are display-only; final segments are appended in
+`sequence` order. Stopping sends the exact frame `{"type":"stop"}` and waits for
+the server's `completed` event before reporting completion.
+
+Start the backend first in one terminal (see above), with `DATABASE_URL` and
+`GEMINI_API_KEY` configured. Then start the frontend in a second terminal:
+
+```powershell
+npm --prefix frontend run dev
+```
+
+Open `http://127.0.0.1:5173`. The Vite development server proxies `/health` to
+`http://127.0.0.1:8000` and `/ws` to `ws://127.0.0.1:8000`, so the browser uses
+the same origin and no backend CORS configuration is required. The microphone
+requires a secure context; `localhost` and `127.0.0.1` are treated as secure.
+
+To use a different backend address, create `frontend/.env.local` (ignored by
+Git) and set the optional WebSocket base URL:
+
+```dotenv
+VITE_WS_URL=ws://127.0.0.1:8000
+```
+
+`VITE_WS_URL` must use `ws://` or `wss://`. The frontend appends
+`/ws/transcribe` when the override does not already end with that path. It is a
+public endpoint address, not a credential; do not put API keys in frontend
+environment variables.
+
+Language options map to the existing `language_codes` query parameter:
+
+- Automatic: `auto` (used for English, Hindi, and Hinglish)
+- Hindi and English: `hi-IN,en-IN`
+- English: `en-IN`
+- Hindi: `hi-IN`
+
+The session hook implements `idle → connecting → recording → stopping →
+completed` with an `error` path. It waits for `ready` before requesting the
+microphone, prevents duplicate starts and duplicate final sequences, rejects
+malformed or out-of-session messages, and stops the microphone if the socket
+closes, the backend reports an error, the client stops, or the 600-second limit
+is reached. A hidden AudioWorklet forwards audio blocks to a tested
+`Pcm16Framer`, which handles arbitrary AudioContext sample rates, partial
+frames, and multiple frames per block.
+
+Frontend commands:
+
+```powershell
+npm --prefix frontend test
+npm --prefix frontend run typecheck
+npm --prefix frontend run build
+npm --prefix frontend run preview
+```
+
+The production build is written to `frontend/dist/`. `npm run preview` uses the
+same proxy configuration. The frontend does not store transcripts in the
+browser, expose a transcript history API, or authenticate users.
+
 The application package is organized as:
 
 ```text
@@ -226,6 +310,21 @@ backend/app/
   main.py          create_app(), lifespan, and the ASGI app
   routes/health.py GET /health
   routes/transcription.py /ws/transcribe and audio protocol
+```
+
+The frontend is organized as:
+
+```text
+frontend/
+  public/pcm-worklet.js        AudioWorklet that forwards Float32 blocks
+  src/audio/capture.ts         microphone, AudioContext, worklet cleanup
+  src/lib/pcm.ts               PCM16 conversion, resampling, 100 ms framing
+  src/lib/protocol.ts          typed WebSocket messages and URL construction
+  src/session/sessionState.ts  pure session reducer and final ordering
+  src/session/useTranscription.ts WebSocket/microphone orchestration
+  src/App.tsx                   transcription interface
+  src/styles.css                responsive light/dark styling
+  src/**/*.test.ts              Vitest unit tests
 ```
 
 Unhandled HTTP errors return HTTP 500 with a generic
@@ -351,6 +450,7 @@ transcripts, then closes the session and microphone stream.
 | `TEST_DATABASE_URL` | PostgreSQL tests | No; yes to run them | None |
 | `GEMINI_API_KEY` | Phase 0 CLI and `/ws/transcribe` | Yes for CLI and WebSocket sessions | None |
 | `GEMINI_LIVE_MODEL` | Phase 0 CLI and `/ws/transcribe` | No | `gemini-3.5-transcribe-live` |
+| `VITE_WS_URL` | Frontend WebSocket client | No | Vite proxy to `127.0.0.1:8000` |
 
 `APP_ENV` accepts `development`, `test`, or `production` and is normalized to
 lowercase. `LOG_LEVEL` accepts `CRITICAL`, `ERROR`, `WARNING`, `INFO`, or
@@ -372,6 +472,11 @@ placeholder Gemini keys are rejected by the CLI before any network request and
 by `/ws/transcribe` with an `invalid_configuration` error. The FastAPI app starts
 without any Gemini setting, but transcription sessions require the key.
 
+Frontend settings are read by Vite from `frontend/.env.local` or the process
+environment. `VITE_WS_URL` is public configuration and must contain only a
+WebSocket endpoint, never a Gemini key or database credential. Without it, the
+frontend uses the Vite `/ws` proxy target (`ws://127.0.0.1:8000`).
+
 Use `--language auto` (the default) to omit language hints and let the model
 detect language. `--language hi-IN,en-IN` supplies hints for Hindi and English
 (India). Hinglish is not a separate language code; mixed-language support
@@ -381,6 +486,9 @@ depends on automatic detection and must be tested with representative audio.
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest
+npm --prefix frontend test
+npm --prefix frontend run typecheck
+npm --prefix frontend run build
 ```
 
 The suite covers Phase 0 configuration validation and redaction, WAV/PCM
@@ -393,6 +501,13 @@ contract, final-only persistence and sequence ordering, WebSocket readiness,
 audio and text validation, configuration/database/upstream/persistence errors,
 client stop, shortened session timeout, and disconnect cleanup. Tests do not
 call Gemini or other external network services and use fake Gemini sessions.
+
+The frontend Vitest suite covers Float32-to-PCM16 conversion and clipping,
+resampling to 16 kHz, exact 1,600-sample frames, partial and multi-frame
+buffering, WebSocket protocol parsing and malformed messages, URL construction,
+session transitions, final-segment ordering, duplicate final handling, and
+error states. Browser APIs are mocked or avoided; no live Gemini request is
+made. The production build runs the TypeScript compiler before Vite.
 
 To run the optional PostgreSQL integration test, set a separate disposable test
 database:
@@ -445,6 +560,20 @@ Documented Live transcription limits:
   `{"type":"stop"}` to finish.
 - **WebSocket `invalid_message` / close code 1003:** Only the stop text frame is
   accepted; other text frames are rejected.
+- **Frontend page returns a proxy or connection error:** Start the FastAPI
+  service on `127.0.0.1:8000` before using the Vite server on port 5173. The
+  development proxy does not start the backend automatically.
+- **Microphone permission denied or unavailable:** Allow microphone access in
+  the browser, close other applications using the device, and use a browser with
+  AudioWorklet support. Browsers require localhost or HTTPS for microphone
+  access.
+- **`browser not supported` in the UI:** The page needs `getUserMedia`,
+  AudioWorklet, and `AudioContext`. Update the browser or use a Chromium-based
+  browser local to the machine.
+- **`VITE_WS_URL must use the ws:// or wss:// scheme`:** Correct the public
+  frontend environment value in `frontend/.env.local`; never place secrets there.
+- **Swagger shows only `/health`:** This is expected. `/ws/transcribe` is a
+  WebSocket route and is not represented in OpenAPI.
 - **Uvicorn reports no WebSocket implementation:** Install
   `backend/requirements.txt`, which pins `websockets`.
 - **`No usable microphone at 16000 Hz...`:** Use `--list-devices`, make a
