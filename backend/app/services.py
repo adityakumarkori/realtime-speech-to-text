@@ -2,7 +2,10 @@ import uuid
 
 from app.database import Database
 from app.models import Transcript
-from app.repositories import TranscriptRepository
+from app.repositories import (
+    SessionPage,
+    TranscriptRepository,
+)
 
 MAX_LANGUAGE_CODE_LENGTH = 35
 
@@ -61,3 +64,43 @@ class TranscriptService:
     def list_for_session(self, session_id: uuid.UUID) -> list[Transcript]:
         with self._database.session_scope() as session:
             return self._repository.list_for_session(session, session_id)
+
+    def list_sessions(
+        self,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        search: str | None = None,
+    ) -> SessionPage:
+        normalized_search = search.strip() if search else None
+        if normalized_search == "":
+            normalized_search = None
+        with self._database.session_scope() as session:
+            return self._repository.list_sessions(
+                session,
+                limit=limit,
+                offset=offset,
+                search=normalized_search,
+            )
+
+    def update_transcript(
+        self,
+        transcript_id: uuid.UUID,
+        text: str,
+    ) -> Transcript | None:
+        normalized_text = text.strip()
+        if not normalized_text:
+            raise TranscriptValidationError(
+                "Transcript text must not be blank."
+            )
+
+        with self._database.session_scope() as session:
+            return self._repository.update_text(
+                session,
+                transcript_id,
+                normalized_text,
+            )
+
+    def delete_session(self, session_id: uuid.UUID) -> int:
+        with self._database.session_scope() as session:
+            return self._repository.delete_session(session, session_id)

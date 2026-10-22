@@ -1,6 +1,7 @@
 import os
 import uuid
 from collections.abc import Callable, Iterator
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -10,9 +11,11 @@ from dotenv import dotenv_values
 from sqlalchemy import Connection, create_engine, inspect, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError, IntegrityError
+from sqlalchemy.orm import Session
 from sqlalchemy.pool import NullPool
 
 from app.models import Transcript
+from app.repositories import TranscriptRepository
 
 ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
 
@@ -155,3 +158,77 @@ def test_postgres_migration_round_trip(
     assert "transcripts" not in inspect(connection).get_table_names(
         schema=schema
     )
+
+@pytest.mark.postgres
+def test_postgres_history_queries(
+    postgres_schema: tuple[Connection, str],
+    alembic_config_factory: Callable[[str | None], Config],
+) -> None:
+    connection, _schema = postgres_schema
+    config = alembic_config_factory(None)
+    config.attributes["connection"] = connection
+
+    command.upgrade(config, "head")
+    if connection.in_transaction():
+        connection.commit()
+
+    first_session = uuid.uuid4()
+    second_session = uuid.uuid4()
+    base_time = datetime(2026, 3, 1, 9, 0, tzinfo=timezone.utc)
+    first_segment = Transcript(
+        session_id=first_session,
+        sequence=0,
+        text="Project kickoff.",
+        language_code="en-IN",
+        created_at=base_time,
+    )
+    second_segment = Transcript(
+        session_id=first_session,
+        sequence=1,
+        text="Follow-up notes.",
+        language_code="hi-IN",
+        created_at=base_time + timedelta(minutes=1),
+    )
+    other_segment = Transcript(
+        session_id=second_session,
+        sequence=0,
+        text="Another session.",
+        created_at=base_time + timedelta(hours=1),
+    )
+
+    repository = TranscriptRepository()
+    with Session(bind=connection) as session:
+        session.add_all([first_segment, second_segment, other_segment])
+        session.commit()
+
+        page = repository.list_sessions(
+            session,
+            limit=10,
+            offset=0,
+            search="PROJECT",
+        )
+        assert page.total == 1
+        summary = page.sessions[0]
+        assert summary.session_id == first_session
+        assert summary.segment_count == 2
+        assert summary.preview == "Project kickoff."
+        assert summary.language_codes == ("en-IN", "hi-IN")
+        assert summary.started_at == base_time
+        assert summary.ended_at == base_time + timedelta(minutes=1)
+
+        updated = repository.update_text(
+            session,
+            first_segment.id,
+            "Project kickoff edited.",
+        )
+        session.commit()
+        assert updated is not None
+        assert updated.text == "Project kickoff edited."
+
+        assert repository.delete_session(session, first_session) == 2
+        session.commit()
+        assert repository.list_for_session(session, first_session) == []
+        assert (
+            repository.list_for_session(session, second_session)[0].text
+            == "Another session."
+        )

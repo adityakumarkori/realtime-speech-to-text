@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { HistoryDashboard } from './history/HistoryDashboard'
 import { useTranscription } from './session/useTranscription'
 import type { SessionStatus } from './session/sessionState'
 
@@ -31,6 +32,14 @@ function completionText(reason: string): string {
 function App() {
   const { state, start, stop } = useTranscription()
   const [language, setLanguage] = useState('auto')
+  const [activeView, setActiveView] = useState<'live' | 'history'>('live')
+  const [historyRefreshToken, setHistoryRefreshToken] = useState(0)
+
+  useEffect(() => {
+    if (state.status === 'completed') {
+      setHistoryRefreshToken((value) => value + 1)
+    }
+  }, [state.status])
 
   const microphoneSupported =
     typeof navigator !== 'undefined' &&
@@ -50,149 +59,192 @@ function App() {
     <main className="app-shell">
       <header className="app-header">
         <p className="eyebrow">Gemini Live · Speech to text</p>
-        <h1>Live transcription</h1>
+        <h1>Real-time transcription</h1>
         <p className="lede">
           Stream microphone audio in English, Hindi, or Hinglish. Finalized
-          segments are persisted as they arrive.
+          segments are persisted as they arrive and can be reviewed in History.
         </p>
       </header>
 
-      {!microphoneSupported && (
-        <div className="alert" role="alert">
-          <strong>Browser not supported</strong>
-          <span>
-            This app requires microphone access, AudioWorklet, and a secure
-            context such as localhost or HTTPS.
-          </span>
-        </div>
-      )}
+      <nav className="view-tabs" aria-label="Application views">
+        <button
+          type="button"
+          className="view-tab"
+          aria-current={activeView === 'live' ? 'page' : undefined}
+          onClick={() => setActiveView('live')}
+        >
+          Live session
+        </button>
+        <button
+          type="button"
+          className="view-tab"
+          aria-current={activeView === 'history' ? 'page' : undefined}
+          onClick={() => setActiveView('history')}
+        >
+          History
+        </button>
+      </nav>
 
-      <section className="panel controls" aria-labelledby="controls-heading">
-        <h2 id="controls-heading" className="visually-hidden">
-          Session controls
-        </h2>
+      {activeView === 'live' ? (
+        <div className="view-stack">
+          {!microphoneSupported && (
+            <div className="alert" role="alert">
+              <strong>Browser not supported</strong>
+              <span>
+                This app requires microphone access, AudioWorklet, and a secure
+                context such as localhost or HTTPS.
+              </span>
+            </div>
+          )}
 
-        <div className="control-row">
-          <div className="field">
-            <label htmlFor="language">Language</label>
-            <select
-              id="language"
-              value={language}
-              onChange={(event) => setLanguage(event.target.value)}
-              disabled={isBusy}
-            >
-              {LANGUAGE_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="button-row">
-            <button
-              type="button"
-              className="button primary"
-              onClick={() => start(language)}
-              disabled={!canStart}
-            >
-              Start transcription
-            </button>
-            <button
-              type="button"
-              className="button secondary"
-              onClick={stop}
-              disabled={!canStop}
-            >
-              Stop
-            </button>
-          </div>
-        </div>
-
-        <div className="session-meta">
-          <span
-            className={`status status-${state.status}`}
-            role="status"
-            aria-live="polite"
+          <section
+            className="panel controls"
+            aria-labelledby="controls-heading"
           >
-            <span className="status-dot" aria-hidden="true" />
-            {STATUS_LABELS[state.status]}
-          </span>
+            <h2 id="controls-heading" className="visually-hidden">
+              Session controls
+            </h2>
 
-          {state.sessionId && (
-            <span className="session-id">
-              Session <code>{state.sessionId}</code>
-            </span>
+            <div className="control-row">
+              <div className="field">
+                <label htmlFor="language">Language</label>
+                <select
+                  id="language"
+                  value={language}
+                  onChange={(event) => setLanguage(event.target.value)}
+                  disabled={isBusy}
+                >
+                  {LANGUAGE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="button-row">
+                <button
+                  type="button"
+                  className="button primary"
+                  onClick={() => start(language)}
+                  disabled={!canStart}
+                >
+                  Start transcription
+                </button>
+                <button
+                  type="button"
+                  className="button secondary"
+                  onClick={stop}
+                  disabled={!canStop}
+                >
+                  Stop
+                </button>
+              </div>
+            </div>
+
+            <div className="session-meta">
+              <span
+                className={`status status-${state.status}`}
+                role="status"
+                aria-live="polite"
+              >
+                <span className="status-dot" aria-hidden="true" />
+                {STATUS_LABELS[state.status]}
+              </span>
+
+              {state.sessionId && (
+                <span className="session-id">
+                  Session <code>{state.sessionId}</code>
+                </span>
+              )}
+            </div>
+
+            {state.audio && (
+              <p className="audio-meta">
+                {(state.audio.sample_rate_hz / 1000).toFixed(0)} kHz ·{' '}
+                {state.audio.channels === 1
+                  ? 'mono'
+                  : `${state.audio.channels} channels`}{' '}
+                · {Math.round(state.audio.max_session_seconds / 60)} min maximum
+              </p>
+            )}
+          </section>
+
+          {state.error && (
+            <div className="alert" role="alert">
+              <strong>{state.error.message}</strong>
+              <span className="error-code">{state.error.code}</span>
+            </div>
           )}
-        </div>
 
-        {state.audio && (
-          <p className="audio-meta">
-            {(state.audio.sample_rate_hz / 1000).toFixed(0)} kHz ·{' '}
-            {state.audio.channels === 1 ? 'mono' : `${state.audio.channels} channels`}{' '}
-            · {Math.round(state.audio.max_session_seconds / 60)} min maximum
-          </p>
-        )}
-      </section>
-
-      {state.error && (
-        <div className="alert" role="alert">
-          <strong>{state.error.message}</strong>
-          <span className="error-code">{state.error.code}</span>
-        </div>
-      )}
-
-      {state.status === 'completed' && (
-        <section className="panel outcome" aria-live="polite">
-          <h2>Session complete</h2>
-          <p>
-            {finalCount} final {finalCount === 1 ? 'segment' : 'segments'}{' '}
-            persisted. {completionText(state.completionReason ?? '')}
-          </p>
-        </section>
-      )}
-
-      <div className="transcript-grid">
-        <section className="panel transcript-panel" aria-labelledby="interim-heading">
-          <div className="panel-heading">
-            <h2 id="interim-heading">Live interim</h2>
-            <span className="hint">Not saved</span>
-          </div>
-          <p className="interim-text" aria-live="polite">
-            {state.interim || 'Speak to see a live caption here.'}
-          </p>
-        </section>
-
-        <section className="panel transcript-panel" aria-labelledby="final-heading">
-          <div className="panel-heading">
-            <h2 id="final-heading">Final transcript</h2>
-            <span className="count">{finalCount}</span>
-          </div>
-
-          {state.finals.length === 0 ? (
-            <p className="empty-state">
-              Finalized segments will appear here in sequence order.
-            </p>
-          ) : (
-            <ol className="final-list">
-              {state.finals.map((segment) => (
-                <li key={segment.sequence} className="final-segment">
-                  <span className="sequence" aria-hidden="true">
-                    {segment.sequence + 1}
-                  </span>
-                  <p>{segment.text}</p>
-                </li>
-              ))}
-            </ol>
+          {state.status === 'completed' && (
+            <section className="panel outcome" aria-live="polite">
+              <h2>Session complete</h2>
+              <p>
+                {finalCount} final {finalCount === 1 ? 'segment' : 'segments'}{' '}
+                persisted. {completionText(state.completionReason ?? '')}
+              </p>
+              <button
+                type="button"
+                className="button text-button"
+                onClick={() => setActiveView('history')}
+              >
+                View in history
+              </button>
+            </section>
           )}
-        </section>
-      </div>
+
+          <div className="transcript-grid">
+            <section
+              className="panel transcript-panel"
+              aria-labelledby="interim-heading"
+            >
+              <div className="panel-heading">
+                <h2 id="interim-heading">Live interim</h2>
+                <span className="hint">Not saved</span>
+              </div>
+              <p className="interim-text" aria-live="polite">
+                {state.interim || 'Speak to see a live caption here.'}
+              </p>
+            </section>
+
+            <section
+              className="panel transcript-panel"
+              aria-labelledby="final-heading"
+            >
+              <div className="panel-heading">
+                <h2 id="final-heading">Final transcript</h2>
+                <span className="count">{finalCount}</span>
+              </div>
+
+              {state.finals.length === 0 ? (
+                <p className="empty-state">
+                  Finalized segments will appear here in sequence order.
+                </p>
+              ) : (
+                <ol className="final-list">
+                  {state.finals.map((segment) => (
+                    <li key={segment.sequence} className="final-segment">
+                      <span className="sequence" aria-hidden="true">
+                        {segment.sequence + 1}
+                      </span>
+                      <p>{segment.text}</p>
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </section>
+          </div>
+        </div>
+      ) : (
+        <HistoryDashboard refreshToken={historyRefreshToken} />
+      )}
 
       <footer className="app-footer">
         <p>
           Audio is streamed to the local backend and Gemini Live. Only final
-          segments are persisted. This endpoint is intended for local
-          development and is not authenticated.
+          segments are persisted. The API is intended for local development
+          and is not authenticated.
         </p>
       </footer>
     </main>

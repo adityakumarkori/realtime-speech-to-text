@@ -10,12 +10,14 @@ WebSocket endpoint that streams browser audio frames to Gemini Live and persists
 only finalized transcript segments. Phase 4 adds a React and TypeScript
 frontend that captures microphone audio, streams PCM16 frames over that
 WebSocket, displays interim captions, and shows persisted final segments.
+Phase 5 adds a database-backed REST history API and a dashboard for listing,
+searching, viewing, editing, and deleting finalized transcription sessions.
 
-The project has no authentication, Docker setup, or public transcript CRUD API.
-The Phase 0 CLI and the WebSocket endpoint both use Gemini Live; neither is
-connected to the internal transcript persistence API for reading data back.
-Finalized segments are written through the internal service layer, and the
-Phase 0 CLI does not write to the database.
+The project has no authentication or Docker setup. The Phase 0 CLI and the
+WebSocket endpoint both use Gemini Live. The WebSocket endpoint persists final
+segments; the dashboard reads, edits, and deletes them through the REST API.
+The Phase 0 CLI does not write to the database. The REST API is intended for
+local development and must not be exposed to untrusted networks.
 
 ## Verification status
 
@@ -24,10 +26,10 @@ Checked on 2026-10-22 on Windows 11 with Python 3.12.7,
 `psycopg==3.3.6`, `alembic==1.20.1`, `websockets==16.1.1`, Node.js 24.14.0,
 npm 11.9.0, React 19.3.1, Vite 8.3.5, TypeScript 6.0.3, and Vitest 4.1.12:
 
-- 107 backend tests pass, covering the Phase 0 pipeline, a pinned-SDK contract
+- 125 backend tests pass, covering the Phase 0 pipeline, a pinned-SDK contract
   test, a fake-session orchestration test, CLI device validation, Phase 1 app
-  configuration, health, and error behavior, and Phase 2 persistence and
-  migrations.
+  configuration, health, and error behavior, Phase 2 persistence and
+  migrations, Phase 3 WebSocket streaming, and the Phase 5 history API.
 - Phase 2 tests cover database configuration, degraded startup, transcript
   persistence and constraints, SQLite migration upgrade/downgrade, and a
   PostgreSQL migration/constraint round-trip against a local PostgreSQL 17
@@ -37,21 +39,34 @@ npm 11.9.0, React 19.3.1, Vite 8.3.5, TypeScript 6.0.3, and Vitest 4.1.12:
   protocol errors, missing configuration, database failures, client stop,
   shortened session timeout, and disconnect cleanup. They use fake Gemini
   sessions and do not call the Gemini API or other external services.
-- 39 frontend Vitest tests pass, covering PCM16 conversion and clipping,
+- Phase 5 backend tests cover session metadata and ordering, case-insensitive
+  search with literal `%`/`_` handling, pagination and empty results, ordered
+  session detail, edit normalization and blank rejection, 404/422 responses,
+  deletion of all segments in a session, query validation, and the
+  database-unavailable 503 response. An app-level fake-upstream WebSocket test
+  confirms that a live final segment is persisted and returned by the history
+  endpoints. When `TEST_DATABASE_URL` is configured, an additional PostgreSQL
+  test exercises session summaries, search, editing, and deletion against a
+  temporary schema; otherwise it is skipped.
+- 53 frontend Vitest tests pass, covering PCM16 conversion and clipping,
   resampling from 8 kHz, 32 kHz, 44.1 kHz, and 48 kHz, exact frame construction,
   partial and multi-frame buffering, WebSocket message parsing, malformed
-  messages, URL construction, session transitions, final ordering, and errors.
+  messages, URL construction, session transitions, final ordering, errors,
+  the history API client, and dashboard list/detail/search/edit/delete and
+  completion-refresh flows.
 - `npm run build` completes with TypeScript checks and a production Vite build.
 - The Vite development server returned the page with HTTP 200. `GET /health`
   returned `{"status":"ok"}` both directly and through the Vite `/health` proxy.
-  A WebSocket handshake through the Vite `/ws` proxy reached the FastAPI app and
-  returned the expected `database_unavailable` error when persistence was
-  deliberately disabled for the check. No Gemini request was made.
+  `GET /api/transcription-sessions` returned HTTP 200 both directly and through
+  the Vite `/api` proxy. A WebSocket handshake through the Vite `/ws` proxy
+  reached the FastAPI app and returned the expected `database_unavailable` error
+  when persistence was deliberately disabled for that earlier check. No Gemini
+  request was made.
 - The full live path (browser microphone → Gemini Live → PostgreSQL → UI) was
   not exercised in this session. It requires an interactive microphone and a
-  configured application `DATABASE_URL`; neither was available in the automated
-  environment. The frontend protocol/audio logic is unit tested, not validated
-  against a live microphone.
+  configured application `DATABASE_URL`; the automated environment did not have
+  an interactive microphone. The history dashboard was tested with jsdom and
+  mocked API responses, not in a live browser against new microphone audio.
 - A security check confirmed `backend/.env` is ignored and untracked, no real
   credentials or database URLs are committed, and PostgreSQL tests leave no
   temporary schemas behind.
@@ -129,12 +144,14 @@ with a trusted HTTPS mirror for that command only:
 .\.venv\Scripts\python.exe -m pip install --index-url https://pypi.tuna.tsinghua.edu.cn/simple -r backend\requirements.txt -r backend\requirements-dev.txt
 ```
 
-## FastAPI service (Phases 1-3)
+## FastAPI service (Phases 1-5)
 
-The application exposes `GET /health` and the local-development WebSocket
-endpoint `/ws/transcribe`. It does not expose a public transcript CRUD or
-read API. Final transcript segments are persisted through the internal
-`TranscriptService`, which uses one row per finalized segment.
+The application exposes `GET /health`, the local-development WebSocket endpoint
+`/ws/transcribe`, and unauthenticated REST endpoints under `/api` for reading,
+editing, and deleting finalized transcription history. Final transcript
+segments are persisted through `TranscriptService`, which uses one row per
+finalized segment. There is no separate session table; a session is the group
+of finalized segments that share a `session_id`.
 
 If `DATABASE_URL` is missing or blank, the app starts with a warning, but
 `/ws/transcribe` rejects new sessions with `database_unavailable` because final
@@ -165,8 +182,8 @@ Expected response:
 ```
 
 Stop the server with `Ctrl+C`. Interactive API documentation is available at
-`http://127.0.0.1:8000/docs` while it is running. It lists only the HTTP
-`GET /health` route because WebSocket routes are not part of OpenAPI. The health
+`http://127.0.0.1:8000/docs` while it is running. It lists `GET /health` and the
+`/api` history routes; WebSocket routes are not part of OpenAPI. The health
 check does not contact Gemini, require `GEMINI_API_KEY`, or require
 `DATABASE_URL`.
 
@@ -230,17 +247,113 @@ Error codes include `invalid_configuration`, `database_unavailable`,
 1008, invalid messages 1003, invalid audio 1007 or 1009, and server-side
 database/upstream/persistence failures 1011. The endpoint is unauthenticated and
 is intended only for local development; bind it to `127.0.0.1` and do not expose
-it to untrusted networks. Audio and transcript content are not logged. There is
-no API for reading persisted transcripts.
+it to untrusted networks. Audio and transcript content are not logged.
 
-## Frontend (Phase 4)
+## Transcription history API (Phase 5)
+
+These unauthenticated endpoints are intended for local development. They require
+a configured `DATABASE_URL`; otherwise they return HTTP 503 with
+`{"detail":"Database unavailable"}`. Missing sessions or segments return HTTP
+404, invalid UUIDs and invalid query or body values return HTTP 422, and
+unexpected failures return the generic HTTP 500 response.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/transcription-sessions` | List sessions, newest first |
+| `GET` | `/api/transcription-sessions/{session_id}` | Read one session and its segments |
+| `PATCH` | `/api/transcript-segments/{transcript_id}` | Edit one finalized segment |
+| `DELETE` | `/api/transcription-sessions/{session_id}` | Delete a session and all its segments |
+
+The list endpoint accepts these query parameters:
+
+- `q`: optional case-insensitive substring search over finalized segment text.
+  `%` and `_` are treated as literal characters. The search selects matching
+  sessions; each summary still describes the whole session.
+- `limit`: page size from 1 to 100, default 50.
+- `offset`: non-negative row offset, default 0.
+
+A list response contains `sessions`, `total` (distinct matching sessions),
+`limit`, and `offset`. Each session summary contains `session_id`, `started_at`,
+`ended_at`, `segment_count`, a text `preview` of at most 200 characters, and
+`language_codes`:
+
+```json
+{
+  "sessions": [
+    {
+      "session_id": "0f8fad5b-d9cb-469f-a165-70867728950e",
+      "started_at": "2026-10-22T10:00:00+00:00",
+      "ended_at": "2026-10-22T10:01:00+00:00",
+      "segment_count": 3,
+      "preview": "The first finalized segment...",
+      "language_codes": ["en-IN"]
+    }
+  ],
+  "total": 1,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+Session detail returns the ordered segments, with `sequence` starting at 0:
+
+```json
+{
+  "session_id": "0f8fad5b-d9cb-469f-a165-70867728950e",
+  "started_at": "2026-10-22T10:00:00+00:00",
+  "ended_at": "2026-10-22T10:01:00+00:00",
+  "segment_count": 2,
+  "segments": [
+    {
+      "id": "6c1f7d8e-3d20-4b38-9b9c-1f4f7d4d0d1a",
+      "session_id": "0f8fad5b-d9cb-469f-a165-70867728950e",
+      "sequence": 0,
+      "text": "First segment.",
+      "language_code": "en-IN",
+      "created_at": "2026-10-22T10:00:10+00:00"
+    }
+  ]
+}
+```
+
+An edit request contains `{"text":"Corrected text."}`. The server trims the
+text, rejects a blank result with HTTP 422, and returns the updated segment.
+Deletion returns HTTP 204 with no body and removes every segment in the session.
+Sessions are derived from the `transcripts` table, so no migration is required
+for these endpoints beyond the existing initial migration.
+
+PowerShell examples (take `$sessionId` and `$segmentId` from a list or detail
+response):
+
+```powershell
+Invoke-RestMethod "http://127.0.0.1:8000/api/transcription-sessions?q=project&limit=20&offset=0"
+Invoke-RestMethod "http://127.0.0.1:8000/api/transcription-sessions/$sessionId"
+Invoke-RestMethod -Method Patch -ContentType "application/json" `
+  -Body '{"text":"Corrected text."}' `
+  "http://127.0.0.1:8000/api/transcript-segments/$segmentId"
+Invoke-RestMethod -Method Delete `
+  "http://127.0.0.1:8000/api/transcription-sessions/$sessionId"
+```
+
+Deleting a session is permanent. Do not expose this API to untrusted networks
+or use it against a database shared with other users.
+
+## Frontend (Phases 4-5)
 
 The `frontend/` app is a Vite, React, and TypeScript single-page interface for
-the WebSocket service. It captures mono microphone audio, resamples it to
-16 kHz, converts it to signed PCM16 little-endian, and sends 3,200-byte frames
-(100 ms). Interim captions are display-only; final segments are appended in
-`sequence` order. Stopping sends the exact frame `{"type":"stop"}` and waits for
-the server's `completed` event before reporting completion.
+the WebSocket service and the history API. It has two views. The Live session
+view captures mono microphone audio, resamples it to 16 kHz, converts it to
+signed PCM16 little-endian, and sends 3,200-byte frames (100 ms). Interim
+captions are display-only; final segments are appended in `sequence` order.
+Stopping sends the exact frame `{"type":"stop"}` and waits for the server's
+`completed` event before reporting completion.
+
+The History view lists persisted sessions newest first, supports
+case-insensitive text search and pagination, and shows the ordered final
+segments for a selected session. Segments can be edited in place, and a session can be deleted after a
+confirmation prompt. Completing a live session refreshes the history data
+without a full page reload. List, detail, edit, and delete requests use the
+`/api` endpoints documented above.
 
 Start the backend first in one terminal (see above), with `DATABASE_URL` and
 `GEMINI_API_KEY` configured. Then start the frontend in a second terminal:
@@ -249,10 +362,11 @@ Start the backend first in one terminal (see above), with `DATABASE_URL` and
 npm --prefix frontend run dev
 ```
 
-Open `http://127.0.0.1:5173`. The Vite development server proxies `/health` to
-`http://127.0.0.1:8000` and `/ws` to `ws://127.0.0.1:8000`, so the browser uses
-the same origin and no backend CORS configuration is required. The microphone
-requires a secure context; `localhost` and `127.0.0.1` are treated as secure.
+Open `http://127.0.0.1:5173`. The Vite development server proxies `/health` and
+`/api` to `http://127.0.0.1:8000` and `/ws` to `ws://127.0.0.1:8000`, so the
+browser uses the same origin and no backend CORS configuration is required. The
+microphone requires a secure context; `localhost` and `127.0.0.1` are treated as
+secure. Restart the Vite server after changing `vite.config.ts`.
 
 To use a different backend address, create `frontend/.env.local` (ignored by
 Git) and set the optional WebSocket base URL:
@@ -292,8 +406,9 @@ npm --prefix frontend run preview
 ```
 
 The production build is written to `frontend/dist/`. `npm run preview` uses the
-same proxy configuration. The frontend does not store transcripts in the
-browser, expose a transcript history API, or authenticate users.
+same proxy configuration. History is loaded from the backend REST API; the
+frontend does not persist transcripts in browser storage or authenticate users.
+The API and frontend are intended for local development only.
 
 The application package is organized as:
 
@@ -302,14 +417,15 @@ backend/app/
   config.py        app and redacted database configuration
   database.py      engine, sessions, and transaction scope
   models.py        transcript table model
-  repositories.py  transcript data access
-  services.py      final-segment validation and persistence
+  repositories.py  transcript persistence and history queries
+  services.py      final-segment validation, persistence, and history operations
   live.py          Gemini runner, event sequencing, and error mapping
   logging_config.py idempotent console logging setup
   errors.py        {"detail": "..."} error responses
   main.py          create_app(), lifespan, and the ASGI app
   routes/health.py GET /health
   routes/transcription.py /ws/transcribe and audio protocol
+  routes/transcripts.py /api history list, detail, edit, and delete
 ```
 
 The frontend is organized as:
@@ -317,14 +433,16 @@ The frontend is organized as:
 ```text
 frontend/
   public/pcm-worklet.js        AudioWorklet that forwards Float32 blocks
+  src/api/history.ts           typed history REST client and error mapping
   src/audio/capture.ts         microphone, AudioContext, worklet cleanup
+  src/history/HistoryDashboard.tsx history list, search, detail, edit, delete
   src/lib/pcm.ts               PCM16 conversion, resampling, 100 ms framing
   src/lib/protocol.ts          typed WebSocket messages and URL construction
   src/session/sessionState.ts  pure session reducer and final ordering
   src/session/useTranscription.ts WebSocket/microphone orchestration
-  src/App.tsx                   transcription interface
+  src/App.tsx                   live/history views and session completion refresh
   src/styles.css                responsive light/dark styling
-  src/**/*.test.ts              Vitest unit tests
+  src/**/*.test.{ts,tsx}        Vitest unit and dashboard tests
 ```
 
 Unhandled HTTP errors return HTTP 500 with a generic
@@ -499,15 +617,20 @@ database configuration, degraded startup, persistence, constraints, and SQLite
 migration upgrades and downgrades. Phase 3 tests cover the optional callback
 contract, final-only persistence and sequence ordering, WebSocket readiness,
 audio and text validation, configuration/database/upstream/persistence errors,
-client stop, shortened session timeout, and disconnect cleanup. Tests do not
-call Gemini or other external network services and use fake Gemini sessions.
+client stop, shortened session timeout, and disconnect cleanup. Phase 5 tests
+cover history session summaries, ordering, search and wildcard escaping,
+pagination, session detail, edit validation, deletion, query validation, and
+database-unavailable responses. Tests do not call Gemini or other external
+network services and use fake Gemini sessions and a temporary SQLite database.
 
 The frontend Vitest suite covers Float32-to-PCM16 conversion and clipping,
 resampling to 16 kHz, exact 1,600-sample frames, partial and multi-frame
 buffering, WebSocket protocol parsing and malformed messages, URL construction,
 session transitions, final-segment ordering, duplicate final handling, and
-error states. Browser APIs are mocked or avoided; no live Gemini request is
-made. The production build runs the TypeScript compiler before Vite.
+error states. History tests cover the typed REST client and jsdom dashboard
+flows for list, detail, search, edit, delete, and database-unavailable errors.
+Network calls are mocked; no live Gemini request is made. The production build
+runs the TypeScript compiler before Vite.
 
 To run the optional PostgreSQL integration test, set a separate disposable test
 database:
@@ -541,6 +664,16 @@ Documented Live transcription limits:
 
 - **`DATABASE_URL is not set; transcript persistence is disabled`:** This is
   expected without a database. Set `DATABASE_URL` and run the Alembic upgrade.
+- **History shows "database is not configured" or HTTP 503:** Set
+  `DATABASE_URL`, run the Alembic upgrade, and restart the backend. The live
+  WebSocket endpoint also rejects sessions without persistence.
+- **History is empty after a live session:** Only finalized segments are
+  persisted. Wait for the completion event, confirm the backend has a working
+  `DATABASE_URL`, and clear an active search or refresh the list.
+- **History edit returns HTTP 422:** Transcript text is trimmed and must not be
+  blank. Invalid IDs or query parameters also return HTTP 422.
+- **History edit or delete returns HTTP 404:** The segment or session no longer
+  exists. Refresh the list and retry against the current session.
 - **`DATABASE_URL must be set to run database migrations`:** Set the URL before
   running Alembic. The application itself can start without it.
 - **PostgreSQL test is skipped:** Set `TEST_DATABASE_URL` to a dedicated
@@ -563,6 +696,9 @@ Documented Live transcription limits:
 - **Frontend page returns a proxy or connection error:** Start the FastAPI
   service on `127.0.0.1:8000` before using the Vite server on port 5173. The
   development proxy does not start the backend automatically.
+- **History requests return 404 through the Vite server:** Restart Vite after
+  changing `vite.config.ts` so the `/api` proxy is loaded. Vite may listen on
+  `localhost` (including IPv6) rather than only `127.0.0.1`.
 - **Microphone permission denied or unavailable:** Allow microphone access in
   the browser, close other applications using the device, and use a browser with
   AudioWorklet support. Browsers require localhost or HTTPS for microphone
@@ -572,8 +708,9 @@ Documented Live transcription limits:
   browser local to the machine.
 - **`VITE_WS_URL must use the ws:// or wss:// scheme`:** Correct the public
   frontend environment value in `frontend/.env.local`; never place secrets there.
-- **Swagger shows only `/health`:** This is expected. `/ws/transcribe` is a
-  WebSocket route and is not represented in OpenAPI.
+- **Swagger does not show `/ws/transcribe`:** This is expected. `/health` and
+  the `/api` history routes are listed, but WebSocket routes are not represented
+  in OpenAPI.
 - **Uvicorn reports no WebSocket implementation:** Install
   `backend/requirements.txt`, which pins `websockets`.
 - **`No usable microphone at 16000 Hz...`:** Use `--list-devices`, make a

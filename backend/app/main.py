@@ -22,6 +22,7 @@ from app.logging_config import configure_logging
 from app.live import LiveRunner, LiveTranscriptionRunner
 from app.routes.health import router as health_router
 from app.routes.transcription import router as transcription_router
+from app.routes.transcripts import router as transcripts_router
 from app.services import TranscriptService
 
 APP_TITLE = "Real-time Speech-to-Text API"
@@ -69,6 +70,7 @@ def create_app(
     register_exception_handlers(app)
     app.include_router(health_router)
     app.include_router(transcription_router)
+    app.include_router(transcripts_router)
 
     logger.info(
         "Starting %s in %s environment",
