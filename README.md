@@ -553,6 +553,25 @@ backend URL starts with `https://`.
 - Add authentication and access controls before exposing transcript data to
   untrusted users. The app does not provide authentication.
 
+## Continuous integration (GitHub Actions)
+
+`.github/workflows/ci.yml` runs on every push, pull request, and manual
+dispatch. It contains two independent jobs:
+
+- `Backend (pytest)` installs `backend/requirements-dev.txt` on Python 3.12 and
+  runs the full pytest suite from the repository root. `TEST_DATABASE_URL` is
+  intentionally unset, so the optional PostgreSQL test is skipped; all other
+  tests use temporary SQLite databases.
+- `Frontend (typecheck, test, build)` installs from
+  `frontend/package-lock.json` on Node.js 24, then runs `npm run typecheck`,
+  `npm test`, and `npm run build`.
+
+The workflow needs no repository secrets. Deployment remains platform-native:
+Render and Vercel watch this repository and use their own Root Directory
+settings (`backend` and `frontend`). Add branch protection requiring both CI
+jobs before merging to the deployment branch so auto-deploy only publishes
+tested commits.
+
 ## Database migrations
 
 Alembic is the schema source of truth. The initial migration creates the
