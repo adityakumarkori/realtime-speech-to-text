@@ -1,35 +1,39 @@
-# Real-time speech-to-text — Phase 0
+# Real-time speech-to-text
 
-Minimal backend proof of concept for streaming microphone or pre-recorded audio
-to `gemini-3.5-transcribe-live` through the Gemini Live API. It prints
-low-latency interim hypotheses and finalized transcript segments.
+Minimal backend for streaming microphone or pre-recorded audio to
+`gemini-3.5-transcribe-live` through the Gemini Live API. The Phase 0 CLI prints
+low-latency interim hypotheses and finalized transcript segments. Phase 1 adds a
+FastAPI service foundation with configuration, logging, error handling, and a
+health endpoint.
 
-Phase 0 is intentionally small: no frontend, FastAPI service, database, auth,
-Docker, or long-term storage.
+The project has no frontend, database, authentication, Docker setup, Gemini
+HTTP/WebSocket endpoints, or long-term storage.
 
 ## Verification status
 
-Checked on 2026-10-22 on Windows 11 with Python 3.12.7 and
-`google-genai==2.32.0`:
+Checked on 2026-10-22 on Windows 11 with Python 3.12.7,
+`google-genai==2.32.0`, and `fastapi==0.159.1`:
 
-- 39 offline tests pass, including a pinned-SDK contract test, a fake-session
-  orchestration test, and CLI device validation.
+- 53 offline tests pass, covering the Phase 0 pipeline, a pinned-SDK contract
+  test, a fake-session orchestration test, CLI device validation, and Phase 1
+  app configuration, health, and error behavior.
 - A Live API session was established with `gemini-3.5-transcribe-live`.
-- The live microphone pipeline succeeded using device 2, the External
-  Microphone (Realtek), with synthetic English text-to-speech played through
-  the speakers: 28 interim updates, 3 finalized segments, exit code `0`.
-- A synthetic English WAV file produced 19 interim updates and 1 finalized
-  segment, exit code `0`.
-- The default Intel microphone array captured no usable audio; `--device 2` was
-  required on this machine.
-- **Human-spoken English, Hindi, and Hinglish were not tested.** Hindi and
-  Hinglish accuracy remain unverified.
+- Manual live-microphone verification produced 46 interim updates and 3
+  finalized segments while speaking English, Hindi, and Hinglish. This is a
+  manual functional check, not a formal accuracy benchmark.
+- Earlier synthetic English diagnostics produced 28 interim updates and 3
+  finalized segments through speaker playback, and 19 interim updates and 1
+  finalized segment from a WAV file.
+- The default Intel microphone array captured no usable audio; a working input
+  selected with `--device` was required on this machine.
+- `GET /health` returns HTTP 200 with `{"status":"ok"}` without contacting
+  Gemini or requiring an API key.
 - The documented 10-minute session limit was not exercised.
-- Missing API key still produces a clear error with exit code `2`.
+- Missing API key still produces a clear error with exit code `2` in the CLI.
 
-Phase 0 is verified for the Live API and microphone pipeline, but not fully
-verified for human multilingual use. No audio or transcript content was
-written to the repository.
+Phase 0 is functional for English, Hindi, and Hinglish microphone input. No
+formal word-error-rate or multilingual accuracy benchmark has been run. No
+audio or transcript content was written to the repository.
 
 ## Requirements
 
@@ -51,13 +55,16 @@ Copy-Item backend\.env.example backend\.env
 Edit `backend/.env` and replace the placeholder:
 
 ```dotenv
+APP_ENV=development
+LOG_LEVEL=INFO
 GEMINI_API_KEY=your_real_key_here
 GEMINI_LIVE_MODEL=gemini-3.5-transcribe-live
 ```
 
-`GEMINI_LIVE_MODEL` is optional and defaults to
-`gemini-3.5-transcribe-live`. Never commit `backend/.env`; it is ignored by
-Git. The key is read only by the backend process and is never printed.
+`APP_ENV`, `LOG_LEVEL`, and `GEMINI_LIVE_MODEL` are optional. Never commit
+`backend/.env`; it is ignored by Git. The Gemini key is read only by the Phase 0
+CLI through `backend/poc/config.py`; the FastAPI app does not use or require
+it. Secrets are never printed.
 
 If PyPI times out, retry the install. On this machine the install succeeded
 with a trusted HTTPS mirror for that command only:
@@ -66,7 +73,51 @@ with a trusted HTTPS mirror for that command only:
 .\.venv\Scripts\python.exe -m pip install --index-url https://pypi.tuna.tsinghua.edu.cn/simple -r backend\requirements.txt -r backend\requirements-dev.txt
 ```
 
-## Run
+## FastAPI service (Phase 1)
+
+The Phase 1 application is a minimal FastAPI foundation. It exposes only
+`GET /health`; it does not import the Phase 0 POC, contact Gemini, or expose
+Gemini HTTP/WebSocket endpoints. A later phase will add the transcription
+service layer behind a stable API boundary.
+
+Start the service from the project root:
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8000 --reload
+```
+
+In another shell, verify the endpoint:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/health
+```
+
+Expected response:
+
+```json
+{"status":"ok"}
+```
+
+Stop the server with `Ctrl+C`. Interactive API documentation is available at
+`http://127.0.0.1:8000/docs` while it is running. The health check does not
+contact Gemini and does not require `GEMINI_API_KEY`.
+
+The application package is organized as:
+
+```text
+backend/app/
+  config.py        APP_ENV and LOG_LEVEL validation
+  logging.py       idempotent console logging setup
+  errors.py        {"detail": "..."} error responses
+  main.py          create_app() and the ASGI app
+  routes/health.py GET /health
+```
+
+Unhandled errors return HTTP 500 with a generic
+`{"detail":"Internal server error"}` response. The server logs the HTTP method
+and path, but not request bodies, credentials, or transcript content.
+
+## Phase 0 CLI
 
 List microphone-capable devices:
 
@@ -148,13 +199,22 @@ transcripts, then closes the session and microphone stream.
 
 ## Configuration
 
-| Variable | Required | Default |
-| --- | --- | --- |
-| `GEMINI_API_KEY` | Yes | None |
-| `GEMINI_LIVE_MODEL` | No | `gemini-3.5-transcribe-live` |
+| Variable | Used by | Required | Default |
+| --- | --- | --- | --- |
+| `APP_ENV` | FastAPI app | No | `development` |
+| `LOG_LEVEL` | FastAPI app | No | `INFO` |
+| `GEMINI_API_KEY` | Phase 0 CLI | Yes for the CLI | None |
+| `GEMINI_LIVE_MODEL` | Phase 0 CLI | No | `gemini-3.5-transcribe-live` |
 
-Process environment values take precedence over `backend/.env`. Missing,
-blank, and placeholder keys are rejected before any network request.
+`APP_ENV` accepts `development`, `test`, or `production` and is normalized to
+lowercase. `LOG_LEVEL` accepts `CRITICAL`, `ERROR`, `WARNING`, `INFO`, or
+`DEBUG` and is normalized to uppercase. Invalid values stop startup with a
+clear configuration error.
+
+Process environment values take precedence over `backend/.env` for both the
+FastAPI app and the CLI. Missing, blank, and placeholder keys are rejected by
+the CLI before any network request. The FastAPI app does not require any Gemini
+setting.
 
 Use `--language auto` (the default) to omit language hints and let the model
 detect language. `--language hi-IN,en-IN` supplies hints for Hindi and English
@@ -167,11 +227,12 @@ depends on automatic detection and must be tested with representative audio.
 .\.venv\Scripts\python.exe -m pytest
 ```
 
-The suite covers configuration validation and redaction, WAV/PCM validation,
-chunking, transcript event extraction, fake-session orchestration, CLI device
-validation, and the installed `google-genai` contract (version, config fields,
-response fields, send/receive methods, and async client context management).
-Tests do not call the network.
+The 53-test suite covers Phase 0 configuration validation and redaction,
+WAV/PCM validation, chunking, transcript event extraction, fake-session
+orchestration, CLI device validation, and the installed `google-genai` contract
+(version, config fields, response fields, send/receive methods, and async client
+context management). It also covers Phase 1 app configuration, `/health`, and
+HTTP/error responses. Tests do not call the network.
 
 ## Limits and cost
 
