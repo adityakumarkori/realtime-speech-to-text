@@ -15,11 +15,16 @@ database.
 ## Verification status
 
 Checked on 2026-10-22 on Windows 11 with Python 3.12.7,
-`google-genai==2.32.0`, and `fastapi==0.159.1`:
+`google-genai==2.32.0`, `fastapi==0.159.1`, `sqlalchemy==2.1.6`,
+`psycopg==3.3.6`, and `alembic==1.20.1`:
 
-- 53 offline tests pass, covering the Phase 0 pipeline, a pinned-SDK contract
-  test, a fake-session orchestration test, CLI device validation, and Phase 1
-  app configuration, health, and error behavior.
+- 79 tests pass, covering the Phase 0 pipeline, a pinned-SDK contract test, a
+  fake-session orchestration test, CLI device validation, and Phase 1 app
+  configuration, health, and error behavior.
+- Phase 2 tests cover database configuration, degraded startup, transcript
+  persistence and constraints, SQLite migration upgrade/downgrade, and a
+  PostgreSQL migration/constraint round-trip against a local PostgreSQL 17
+  test database.
 - A Live API session was established with `gemini-3.5-transcribe-live`.
 - Manual live-microphone verification produced 46 interim updates and 3
   finalized segments while speaking English, Hindi, and Hinglish. This is a
@@ -30,7 +35,7 @@ Checked on 2026-10-22 on Windows 11 with Python 3.12.7,
 - The default Intel microphone array captured no usable audio; a working input
   selected with `--device` was required on this machine.
 - `GET /health` returns HTTP 200 with `{"status":"ok"}` without contacting
-  Gemini or requiring an API key.
+  Gemini, requiring an API key, or requiring a database URL.
 - The documented 10-minute session limit was not exercised.
 - Missing API key still produces a clear error with exit code `2` in the CLI.
 
