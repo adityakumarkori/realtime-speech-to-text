@@ -5,6 +5,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as historyApi from '../api/history'
@@ -76,7 +77,7 @@ function listResult(sessions: SessionSummary[] = [summary]): SessionList {
   return {
     sessions,
     total: sessions.length,
-    limit: 20,
+    limit: 10,
     offset: 0,
   }
 }
@@ -164,10 +165,9 @@ describe('HistoryDashboard', () => {
     expect(updateSegmentMock).not.toHaveBeenCalled()
   })
 
-  it('deletes a session after confirmation', async () => {
+  it('deletes a session after in-app confirmation', async () => {
     getSessionMock.mockResolvedValue(detail)
     deleteSessionMock.mockResolvedValue(undefined)
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
     render(<HistoryDashboard refreshToken={0} />)
 
     fireEvent.click(
@@ -179,14 +179,42 @@ describe('HistoryDashboard', () => {
       await screen.findByRole('button', { name: 'Delete session' }),
     )
 
+    const dialog = await screen.findByRole('alertdialog')
+    expect(deleteSessionMock).not.toHaveBeenCalled()
+
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Delete permanently' }),
+    )
+
     await waitFor(() => {
       expect(deleteSessionMock).toHaveBeenCalledWith('session-1')
     })
+    expect(screen.queryByRole('alertdialog')).toBeNull()
     expect(
       await screen.findByText(
         'Select a session to view and edit its finalized transcript.',
       ),
     ).toBeTruthy()
+  })
+
+  it('cancels deletion without calling the API', async () => {
+    getSessionMock.mockResolvedValue(detail)
+    render(<HistoryDashboard refreshToken={0} />)
+
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: /Hello from the live session/,
+      }),
+    )
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Delete session' }),
+    )
+
+    const dialog = await screen.findByRole('alertdialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    expect(deleteSessionMock).not.toHaveBeenCalled()
   })
 
   it('searches with the trimmed query', async () => {
@@ -204,7 +232,7 @@ describe('HistoryDashboard', () => {
     await waitFor(() => {
       expect(listSessionsMock).toHaveBeenLastCalledWith({
         query: 'second',
-        limit: 20,
+        limit: 10,
         offset: 0,
       })
     })

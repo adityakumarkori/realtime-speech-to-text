@@ -23,18 +23,18 @@ describe('history API client', () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValue(
-        jsonResponse({ sessions: [], total: 0, limit: 20, offset: 40 }),
+        jsonResponse({ sessions: [], total: 0, limit: 10, offset: 40 }),
       )
     vi.stubGlobal('fetch', fetchMock)
 
     const result = await listSessions({
       query: '  hello world ',
-      limit: 20,
+      limit: 10,
       offset: 40,
     })
 
     expect(fetchMock).toHaveBeenCalledWith(
-      '/api/transcription-sessions?q=hello+world&limit=20&offset=40',
+      '/api/transcription-sessions?q=hello+world&limit=10&offset=40',
       expect.objectContaining({ method: 'GET' }),
     )
     expect(result.total).toBe(0)
@@ -44,14 +44,14 @@ describe('history API client', () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValue(
-        jsonResponse({ sessions: [], total: 0, limit: 50, offset: 0 }),
+        jsonResponse({ sessions: [], total: 0, limit: 10, offset: 0 }),
       )
     vi.stubGlobal('fetch', fetchMock)
 
     await listSessions({ query: '   ' })
 
     expect(fetchMock).toHaveBeenCalledWith(
-      '/api/transcription-sessions?limit=50&offset=0',
+      '/api/transcription-sessions?limit=10&offset=0',
       expect.anything(),
     )
   })

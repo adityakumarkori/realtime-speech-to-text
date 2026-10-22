@@ -10,7 +10,7 @@ import {
   type TranscriptSegment,
 } from '../api/history'
 
-const PAGE_SIZE = 20
+const PAGE_SIZE = 10
 
 interface HistoryDashboardProps {
   refreshToken: number
@@ -65,6 +65,7 @@ export function HistoryDashboard({ refreshToken }: HistoryDashboardProps) {
   const [editError, setEditError] = useState<UiError | null>(null)
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
 
   const detailRequest = useRef(0)
   const previousRefreshToken = useRef(refreshToken)
@@ -111,7 +112,29 @@ export function HistoryDashboard({ refreshToken }: HistoryDashboardProps) {
     setReloadKey((value) => value + 1)
   }, [refreshToken])
 
+  useEffect(() => {
+    if (!confirmingDelete) {
+      return
+    }
+
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape' && !deleting) {
+        setConfirmingDelete(false)
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [confirmingDelete, deleting])
+
   function refreshList() {
+    setConfirmingDelete(false)
     setOffset(0)
     setReloadKey((value) => value + 1)
   }
@@ -124,6 +147,7 @@ export function HistoryDashboard({ refreshToken }: HistoryDashboardProps) {
     setDetailError(null)
     setEditingId(null)
     setEditError(null)
+    setConfirmingDelete(false)
   }
 
   function handleSearch(event: FormEvent<HTMLFormElement>) {
@@ -150,6 +174,7 @@ export function HistoryDashboard({ refreshToken }: HistoryDashboardProps) {
     setDetailError(null)
     setEditingId(null)
     setEditError(null)
+    setConfirmingDelete(false)
     const requestId = detailRequest.current + 1
     detailRequest.current = requestId
 
@@ -218,13 +243,7 @@ export function HistoryDashboard({ refreshToken }: HistoryDashboardProps) {
   }
 
   async function removeSelectedSession() {
-    if (!selectedId || !detail) {
-      return
-    }
-    const confirmed = window.confirm(
-      'Delete this transcription session and all of its finalized segments? This cannot be undone.',
-    )
-    if (!confirmed) {
+    if (!selectedId || !detail || deleting) {
       return
     }
 
@@ -250,6 +269,7 @@ export function HistoryDashboard({ refreshToken }: HistoryDashboardProps) {
       }
     } finally {
       setDeleting(false)
+      setConfirmingDelete(false)
     }
   }
 
@@ -425,10 +445,11 @@ export function HistoryDashboard({ refreshToken }: HistoryDashboardProps) {
                 <button
                   type="button"
                   className="button danger"
-                  onClick={() => void removeSelectedSession()}
+                  onClick={() => setConfirmingDelete(true)}
                   disabled={deleting || saving}
+                  aria-haspopup="dialog"
                 >
-                  {deleting ? 'Deleting…' : 'Delete session'}
+                  Delete session
                 </button>
               </div>
 
@@ -503,6 +524,50 @@ export function HistoryDashboard({ refreshToken }: HistoryDashboardProps) {
           )}
         </section>
       </div>
+
+      {confirmingDelete && detail && (
+        <div
+          className="dialog-backdrop"
+          onClick={(event) => {
+            if (event.target === event.currentTarget && !deleting) {
+              setConfirmingDelete(false)
+            }
+          }}
+        >
+          <div
+            className="confirm-dialog"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="delete-dialog-title"
+            aria-describedby="delete-dialog-description"
+          >
+            <h3 id="delete-dialog-title">Delete this session?</h3>
+            <p id="delete-dialog-description">
+              This permanently removes the session and all of its finalized
+              segments. This cannot be undone.
+            </p>
+            <div className="button-row confirm-actions">
+              <button
+                type="button"
+                className="button secondary"
+                onClick={() => setConfirmingDelete(false)}
+                disabled={deleting}
+                autoFocus
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="button danger"
+                onClick={() => void removeSelectedSession()}
+                disabled={deleting}
+              >
+                {deleting ? 'Deleting…' : 'Delete permanently'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   )
 }

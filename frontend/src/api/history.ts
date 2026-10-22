@@ -109,7 +109,7 @@ export function listSessions(
   if (query) {
     params.set('q', query)
   }
-  params.set('limit', String(options.limit ?? 50))
+  params.set('limit', String(options.limit ?? 10))
   params.set('offset', String(options.offset ?? 0))
   return request<SessionList>(
     `/api/transcription-sessions?${params.toString()}`,

@@ -30,6 +30,8 @@ npm 11.9.0, React 19.3.1, Vite 8.3.5, TypeScript 6.0.3, and Vitest 4.1.12:
   test, a fake-session orchestration test, CLI device validation, Phase 1 app
   configuration, health, and error behavior, Phase 2 persistence and
   migrations, Phase 3 WebSocket streaming, and the Phase 5 history API.
+  Language selection is persisted per finalized segment, including bilingual
+  hints.
 - Phase 2 tests cover database configuration, degraded startup, transcript
   persistence and constraints, SQLite migration upgrade/downgrade, and a
   PostgreSQL migration/constraint round-trip against a local PostgreSQL 17
@@ -44,16 +46,17 @@ npm 11.9.0, React 19.3.1, Vite 8.3.5, TypeScript 6.0.3, and Vitest 4.1.12:
   session detail, edit normalization and blank rejection, 404/422 responses,
   deletion of all segments in a session, query validation, and the
   database-unavailable 503 response. An app-level fake-upstream WebSocket test
-  confirms that a live final segment is persisted and returned by the history
-  endpoints. When `TEST_DATABASE_URL` is configured, an additional PostgreSQL
+  confirms that a live final segment and its selected language code are
+  persisted and returned by the history endpoints. When `TEST_DATABASE_URL` is
+  configured, an additional PostgreSQL
   test exercises session summaries, search, editing, and deletion against a
   temporary schema; otherwise it is skipped.
-- 53 frontend Vitest tests pass, covering PCM16 conversion and clipping,
+- 54 frontend Vitest tests pass, covering PCM16 conversion and clipping,
   resampling from 8 kHz, 32 kHz, 44.1 kHz, and 48 kHz, exact frame construction,
   partial and multi-frame buffering, WebSocket message parsing, malformed
   messages, URL construction, session transitions, final ordering, errors,
-  the history API client, and dashboard list/detail/search/edit/delete and
-  completion-refresh flows.
+  the history API client, and dashboard list/detail/search/edit/delete,
+  in-app confirmation cancel/confirm, and completion-refresh flows.
 - `npm run build` completes with TypeScript checks and a production Vite build.
 - The Vite development server returned the page with HTTP 200. `GET /health`
   returned `{"status":"ok"}` both directly and through the Vite `/health` proxy.
@@ -197,8 +200,10 @@ ws://127.0.0.1:8000/ws/transcribe?language_codes=auto
 
 `language_codes` is optional and defaults to `auto`, which lets Gemini detect
 the language. It may instead be a comma-separated list of BCP-47 hints such as
-`hi-IN,en-IN`. After the connection is accepted, the server checks database and
-Gemini configuration, then sends:
+`hi-IN,en-IN`. The selected hints are saved as each finalized segment's
+`language_code`; bilingual selections are stored comma-separated, while `auto`
+leaves the field empty. After the connection is accepted, the server checks
+database and Gemini configuration, then sends:
 
 ```json
 {
@@ -269,7 +274,7 @@ The list endpoint accepts these query parameters:
 - `q`: optional case-insensitive substring search over finalized segment text.
   `%` and `_` are treated as literal characters. The search selects matching
   sessions; each summary still describes the whole session.
-- `limit`: page size from 1 to 100, default 50.
+- `limit`: page size from 1 to 100, default 10.
 - `offset`: non-negative row offset, default 0.
 
 A list response contains `sessions`, `total` (distinct matching sessions),
@@ -290,7 +295,7 @@ A list response contains `sessions`, `total` (distinct matching sessions),
     }
   ],
   "total": 1,
-  "limit": 50,
+  "limit": 10,
   "offset": 0
 }
 ```
@@ -326,7 +331,7 @@ PowerShell examples (take `$sessionId` and `$segmentId` from a list or detail
 response):
 
 ```powershell
-Invoke-RestMethod "http://127.0.0.1:8000/api/transcription-sessions?q=project&limit=20&offset=0"
+Invoke-RestMethod "http://127.0.0.1:8000/api/transcription-sessions?q=project&limit=10&offset=0"
 Invoke-RestMethod "http://127.0.0.1:8000/api/transcription-sessions/$sessionId"
 Invoke-RestMethod -Method Patch -ContentType "application/json" `
   -Body '{"text":"Corrected text."}' `
@@ -348,12 +353,13 @@ captions are display-only; final segments are appended in `sequence` order.
 Stopping sends the exact frame `{"type":"stop"}` and waits for the server's
 `completed` event before reporting completion.
 
-The History view lists persisted sessions newest first, supports
-case-insensitive text search and pagination, and shows the ordered final
-segments for a selected session. Segments can be edited in place, and a session can be deleted after a
-confirmation prompt. Completing a live session refreshes the history data
-without a full page reload. List, detail, edit, and delete requests use the
-`/api` endpoints documented above.
+The History view lists persisted sessions newest first, loads 10 sessions at a
+time with a load-more control, supports case-insensitive text search, and shows
+the ordered final segments for a selected session. Segments can be edited in
+place, and a session can be deleted after an in-app confirmation dialog (not a
+browser alert). Completing a live session refreshes the history data without a
+full page reload. List, detail, edit, and delete requests use the `/api`
+endpoints documented above.
 
 Start the backend first in one terminal (see above), with `DATABASE_URL` and
 `GEMINI_API_KEY` configured. Then start the frontend in a second terminal:
@@ -382,10 +388,13 @@ environment variables.
 
 Language options map to the existing `language_codes` query parameter:
 
-- Automatic: `auto` (used for English, Hindi, and Hinglish)
-- Hindi and English: `hi-IN,en-IN`
-- English: `en-IN`
-- Hindi: `hi-IN`
+- Automatic: `auto` (used for English, Hindi, and Hinglish); stores no code
+- Hindi and English: `hi-IN,en-IN`; stores `hi-IN,en-IN`
+- English: `en-IN`; stores `en-IN`
+- Hindi: `hi-IN`; stores `hi-IN`
+
+The history list splits comma-separated stored codes so bilingual sessions show
+both language codes.
 
 The session hook implements `idle → connecting → recording → stopping →
 completed` with an `error` path. It waits for `ready` before requesting the
