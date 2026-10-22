@@ -1,11 +1,11 @@
 import asyncio
 import contextlib
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass
 
 from .audio import MIME_TYPE
 from .config import Settings
-from .transcripts import extract_events
+from .transcripts import TranscriptEvent, extract_events
 
 DEFAULT_FLUSH_TIMEOUT_SECONDS = 8.0
 FINAL_IDLE_SECONDS = 1.0
@@ -55,7 +55,11 @@ def _print_event(kind: str, text: str) -> None:
     print(f"[{kind}] {text}", flush=True)
 
 
-async def _receive_loop(session, state: _SessionState) -> None:
+async def _receive_loop(
+    session,
+    state: _SessionState,
+    on_event: Callable[[TranscriptEvent], Awaitable[None]] | None = None,
+) -> None:
     try:
         while True:
             async for response in session.receive():
@@ -64,11 +68,14 @@ async def _receive_loop(session, state: _SessionState) -> None:
                     continue
                 for event in extract_events(content):
                     state.last_event_at = asyncio.get_running_loop().time()
+                    if on_event is not None:
+                        await on_event(event)
                     if event.kind == "interim":
                         state.interim_count += 1
                     else:
                         state.final_transcripts.append(event.text)
-                    _print_event(event.kind, event.text)
+                    if on_event is None:
+                        _print_event(event.kind, event.text)
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -97,6 +104,8 @@ async def run_transcription(
     chunks: AsyncIterator[bytes],
     language_codes: Sequence[str] = (),
     flush_timeout: float = DEFAULT_FLUSH_TIMEOUT_SECONDS,
+    on_ready: Callable[[], Awaitable[None]] | None = None,
+    on_event: Callable[[TranscriptEvent], Awaitable[None]] | None = None,
 ) -> TranscriptionResult:
     if flush_timeout < 0:
         raise ValueError("flush_timeout must not be negative.")
@@ -116,11 +125,17 @@ async def run_transcription(
                     "The Live API session did not return setup_complete."
                 )
 
-            print(
-                f"Live session established with {settings.model}.",
-                flush=True,
+            if on_ready is None and on_event is None:
+                print(
+                    f"Live session established with {settings.model}.",
+                    flush=True,
+                )
+            if on_ready is not None:
+                await on_ready()
+
+            receive_task = asyncio.create_task(
+                _receive_loop(session, state, on_event=on_event)
             )
-            receive_task = asyncio.create_task(_receive_loop(session, state))
 
             try:
                 async for chunk in chunks:
@@ -131,12 +146,18 @@ async def run_transcription(
                     )
 
                 await session.send_realtime_input(audio_stream_end=True)
-                if state.error is not None and not state.final_transcripts:
-                    raise state.error
+                if state.error is not None:
+                    if on_event is None and not state.final_transcripts:
+                        raise state.error
+                    elif on_event is not None:
+                        raise state.error
 
                 await _drain_final_transcripts(state, flush_timeout)
-                if state.error is not None and not state.final_transcripts:
-                    raise state.error
+                if state.error is not None:
+                    if on_event is None and not state.final_transcripts:
+                        raise state.error
+                    elif on_event is not None:
+                        raise state.error
             finally:
                 receive_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):

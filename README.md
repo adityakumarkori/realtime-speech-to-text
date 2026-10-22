@@ -5,30 +5,40 @@ Minimal backend for streaming microphone or pre-recorded audio to
 low-latency interim hypotheses and finalized transcript segments. Phase 1 adds a
 FastAPI service foundation with configuration, logging, error handling, and a
 health endpoint. Phase 2 adds PostgreSQL transcript persistence with SQLAlchemy
-and Alembic migrations.
+and Alembic migrations. Phase 3 adds an unauthenticated, local-development
+WebSocket endpoint that streams browser audio frames to Gemini Live and persists
+only finalized transcript segments.
 
-The project has no frontend, authentication, Docker setup, Gemini HTTP/WebSocket
-endpoints, or public transcript API. Finalized segments can be persisted
-through an internal service layer; the Phase 0 CLI does not write to the
-database.
+The project has no frontend, authentication, Docker setup, or public transcript
+CRUD API. The Phase 0 CLI and the Phase 3 WebSocket endpoint both use Gemini
+Live; neither is connected to the internal transcript persistence API for
+reading data back. Finalized segments are written through the internal service
+layer, and the Phase 0 CLI does not write to the database.
 
 ## Verification status
 
 Checked on 2026-10-22 on Windows 11 with Python 3.12.7,
 `google-genai==2.32.0`, `fastapi==0.159.1`, `sqlalchemy==2.1.6`,
-`psycopg==3.3.6`, and `alembic==1.20.1`:
+`psycopg==3.3.6`, `alembic==1.20.1`, and `websockets==16.1.1`:
 
-- 81 tests pass, covering the Phase 0 pipeline, a pinned-SDK contract test, a
-  fake-session orchestration test, CLI device validation, and Phase 1 app
-  configuration, health, and error behavior.
+- 107 tests pass, covering the Phase 0 pipeline, a pinned-SDK contract test, a
+  fake-session orchestration test, CLI device validation, Phase 1 app
+  configuration, health, and error behavior, and Phase 2 persistence and
+  migrations.
 - Phase 2 tests cover database configuration, degraded startup, transcript
   persistence and constraints, SQLite migration upgrade/downgrade, and a
   PostgreSQL migration/constraint round-trip against a local PostgreSQL 17
   test database.
-- A final security check confirmed `backend/.env` is ignored and untracked, no
-  real credentials or database URLs are committed, and PostgreSQL tests leave
-  no temporary schemas behind.
-- A Live API session was established with `gemini-3.5-transcribe-live`.
+- Phase 3 tests cover optional Gemini callbacks, final-only persistence and
+  sequence ordering, WebSocket readiness and framing, audio validation,
+  protocol errors, missing configuration, database failures, client stop,
+  shortened session timeout, and disconnect cleanup. They use fake Gemini
+  sessions and do not call the Gemini API or other external services.
+- A security check confirmed `backend/.env` is ignored and untracked, no real
+  credentials or database URLs are committed, and PostgreSQL tests leave no
+  temporary schemas behind.
+- A Live API session was established with `gemini-3.5-transcribe-live` from the
+  Phase 0 CLI.
 - Manual live-microphone verification produced 46 interim updates and 3
   finalized segments while speaking English, Hindi, and Hinglish. This is a
   manual functional check, not a formal accuracy benchmark.
@@ -39,8 +49,13 @@ Checked on 2026-10-22 on Windows 11 with Python 3.12.7,
   selected with `--device` was required on this machine.
 - `GET /health` returns HTTP 200 with `{"status":"ok"}` without contacting
   Gemini, requiring an API key, or requiring a database URL.
-- The documented 10-minute session limit was not exercised.
-- Missing API key still produces a clear error with exit code `2` in the CLI.
+- The real 600-second WebSocket limit was not exercised end to end; the timeout
+  path is automated with a shortened limit. The WebSocket endpoint was verified
+  with automated fake-session tests, not a manual browser session.
+- Missing API key still produces a clear error with exit code `2` in the CLI and
+  an `invalid_configuration` WebSocket error in the FastAPI app.
+- Automated verification did not send audio or transcript content to disk or
+  logs. No audio or transcript content was written to the repository.
 
 Phase 0 is functional for English, Hindi, and Hinglish microphone input. No
 formal word-error-rate or multilingual accuracy benchmark has been run. No
@@ -49,10 +64,12 @@ audio or transcript content was written to the repository.
 ## Requirements
 
 - Python 3.12 (the version tested here)
-- A Gemini API key from Google AI Studio
+- A Gemini API key from Google AI Studio for CLI or WebSocket transcription
 - A microphone, or a 16 kHz mono PCM16 WAV/raw PCM file
-- PostgreSQL 17 for transcript persistence and migrations; the FastAPI app
-  still starts without a database URL, but persistence is disabled
+- PostgreSQL 17 for transcript persistence, WebSocket streaming, and migrations;
+  the FastAPI app and `/health` still start without a database URL
+- The pinned `websockets` package, installed from `backend/requirements.txt`, for
+  the WebSocket transport
 
 ## Setup
 
@@ -78,10 +95,12 @@ DATABASE_URL=postgresql+psycopg://user:password@localhost:5432/realtime_transcri
 ```
 
 `APP_ENV`, `LOG_LEVEL`, `GEMINI_LIVE_MODEL`, and `DATABASE_URL` are optional.
-Never commit `backend/.env`; it is ignored by Git. The Gemini key is read only by
-the Phase 0 CLI through `backend/poc/config.py`; the FastAPI app does not use or
-require it. Database URLs are redacted and never printed. Secrets are never
-printed.
+Never commit `backend/.env`; it is ignored by Git. The Gemini key is read only
+on the server for the Phase 0 CLI and Phase 3 WebSocket endpoint. The FastAPI app
+starts without a Gemini key, but `/ws/transcribe` returns an
+`invalid_configuration` error if the key is missing when a session starts.
+Database URLs are redacted and never printed. Secrets and transcript content are
+never logged.
 
 If PyPI times out, retry the install. On this machine the install succeeded
 with a trusted HTTPS mirror for that command only:
@@ -90,17 +109,18 @@ with a trusted HTTPS mirror for that command only:
 .\.venv\Scripts\python.exe -m pip install --index-url https://pypi.tuna.tsinghua.edu.cn/simple -r backend\requirements.txt -r backend\requirements-dev.txt
 ```
 
-## FastAPI service (Phases 1-2)
+## FastAPI service (Phases 1-3)
 
-The application exposes only `GET /health`; it does not import the Phase 0 POC,
-contact Gemini, expose Gemini HTTP/WebSocket endpoints, or expose public
-transcript routes. Final transcript segments can be persisted through the
-internal `TranscriptService`, which uses one row per finalized segment.
+The application exposes `GET /health` and the local-development WebSocket
+endpoint `/ws/transcribe`. It does not expose a public transcript CRUD or
+read API. Final transcript segments are persisted through the internal
+`TranscriptService`, which uses one row per finalized segment.
 
-If `DATABASE_URL` is missing or blank, the app starts with a warning and
-transcript persistence disabled. If it is present, the database engine is
-created during application startup and disposed during shutdown. The health
-endpoint never connects to the database.
+If `DATABASE_URL` is missing or blank, the app starts with a warning, but
+`/ws/transcribe` rejects new sessions with `database_unavailable` because final
+segments cannot be persisted. If it is present, the database engine is created
+during application startup and disposed during shutdown. The health endpoint
+never connects to the database or Gemini.
 
 Start the service from the project root:
 
@@ -128,6 +148,69 @@ Stop the server with `Ctrl+C`. Interactive API documentation is available at
 `http://127.0.0.1:8000/docs` while it is running. The health check does not
 contact Gemini, require `GEMINI_API_KEY`, or require `DATABASE_URL`.
 
+### WebSocket transcription endpoint
+
+Connect to the local-development endpoint:
+
+```text
+ws://127.0.0.1:8000/ws/transcribe?language_codes=auto
+```
+
+`language_codes` is optional and defaults to `auto`, which lets Gemini detect
+the language. It may instead be a comma-separated list of BCP-47 hints such as
+`hi-IN,en-IN`. After the connection is accepted, the server checks database and
+Gemini configuration, then sends:
+
+```json
+{
+  "type": "ready",
+  "session_id": "0f8fad5b-d9cb-469f-a165-70867728950e",
+  "audio": {
+    "encoding": "pcm_s16le",
+    "sample_rate_hz": 16000,
+    "channels": 1,
+    "recommended_frame_bytes": 3200,
+    "max_frame_bytes": 32000,
+    "max_session_seconds": 600
+  }
+}
+```
+
+Send raw binary PCM16 little-endian, mono, 16 kHz audio frames. Frames must have
+an even byte length and must not exceed 32,000 bytes; 3,200-byte frames (100 ms)
+are recommended. Send the exact text frame `{"type":"stop"}` to finish normally.
+The server emits interim and final JSON events:
+
+```json
+{"type":"interim","session_id":"...","text":"partial hypothesis"}
+{"type":"final","session_id":"...","sequence":0,"text":"committed segment"}
+```
+
+Only final segments are persisted, and the final event is emitted only after the
+database commit succeeds. `sequence` starts at `0` for each session and
+increases after each successfully persisted final segment. When the stream ends
+normally, the server sends:
+
+```json
+{"type":"completed","session_id":"...","final_count":1,"reason":"client_stop"}
+```
+
+`reason` is `client_stop` after a stop frame or `max_duration` when the
+600-second session limit is reached. Errors use the same envelope:
+
+```json
+{"type":"error","session_id":"...","code":"invalid_audio","message":"..."}
+```
+
+Error codes include `invalid_configuration`, `database_unavailable`,
+`invalid_message`, `invalid_audio`, `upstream_error`, `persistence_error`, and
+`internal_error`. Normal completion closes with 1000; invalid configuration uses
+1008, invalid messages 1003, invalid audio 1007 or 1009, and server-side
+database/upstream/persistence failures 1011. The endpoint is unauthenticated and
+is intended only for local development; bind it to `127.0.0.1` and do not expose
+it to untrusted networks. Audio and transcript content are not logged. There is
+no API for reading persisted transcripts.
+
 The application package is organized as:
 
 ```text
@@ -137,17 +220,20 @@ backend/app/
   models.py        transcript table model
   repositories.py  transcript data access
   services.py      final-segment validation and persistence
+  live.py          Gemini runner, event sequencing, and error mapping
   logging_config.py idempotent console logging setup
   errors.py        {"detail": "..."} error responses
   main.py          create_app(), lifespan, and the ASGI app
   routes/health.py GET /health
+  routes/transcription.py /ws/transcribe and audio protocol
 ```
 
-Unhandled errors return HTTP 500 with a generic
+Unhandled HTTP errors return HTTP 500 with a generic
 `{"detail":"Internal server error"}` response. Missing database configuration
-returns HTTP 503 if a database-backed operation reaches a request. The server
-logs the HTTP method and path, but not request bodies, credentials, database
-URLs, or transcript content.
+returns HTTP 503 if a database-backed HTTP operation reaches a request. WebSocket
+errors use the JSON envelope documented above. The server logs the HTTP method
+and path, but not request bodies, audio frames, transcript text, credentials,
+database URLs, or provider response bodies.
 
 ## Database migrations
 
@@ -261,10 +347,10 @@ transcripts, then closes the session and microphone stream.
 | --- | --- | --- | --- |
 | `APP_ENV` | FastAPI app | No | `development` |
 | `LOG_LEVEL` | FastAPI app | No | `INFO` |
-| `DATABASE_URL` | FastAPI app and Alembic | No for app; yes for migrations | None |
+| `DATABASE_URL` | FastAPI app, `/ws/transcribe`, and Alembic | No for startup; yes for streaming and migrations | None |
 | `TEST_DATABASE_URL` | PostgreSQL tests | No; yes to run them | None |
-| `GEMINI_API_KEY` | Phase 0 CLI | Yes for the CLI | None |
-| `GEMINI_LIVE_MODEL` | Phase 0 CLI | No | `gemini-3.5-transcribe-live` |
+| `GEMINI_API_KEY` | Phase 0 CLI and `/ws/transcribe` | Yes for CLI and WebSocket sessions | None |
+| `GEMINI_LIVE_MODEL` | Phase 0 CLI and `/ws/transcribe` | No | `gemini-3.5-transcribe-live` |
 
 `APP_ENV` accepts `development`, `test`, or `production` and is normalized to
 lowercase. `LOG_LEVEL` accepts `CRITICAL`, `ERROR`, `WARNING`, `INFO`, or
@@ -281,9 +367,10 @@ database whose name contains `test`, and it must differ from `DATABASE_URL`.
 The PostgreSQL tests use temporary schemas and remove only those schemas.
 
 Process environment values take precedence over `backend/.env` for the FastAPI
-app, Alembic, tests, and the CLI. Missing, blank, and placeholder Gemini keys are
-rejected by the CLI before any network request. The FastAPI app does not require
-any Gemini setting.
+app, Alembic, tests, the WebSocket endpoint, and the CLI. Missing, blank, and
+placeholder Gemini keys are rejected by the CLI before any network request and
+by `/ws/transcribe` with an `invalid_configuration` error. The FastAPI app starts
+without any Gemini setting, but transcription sessions require the key.
 
 Use `--language auto` (the default) to omit language hints and let the model
 detect language. `--language hi-IN,en-IN` supplies hints for Hindi and English
@@ -301,8 +388,11 @@ validation, chunking, transcript event extraction, fake-session orchestration,
 CLI device validation, and the installed `google-genai` contract. It also covers
 Phase 1 app configuration, `/health`, and HTTP/error responses, plus Phase 2
 database configuration, degraded startup, persistence, constraints, and SQLite
-migration upgrades and downgrades. Tests do not call Gemini or other external
-network services.
+migration upgrades and downgrades. Phase 3 tests cover the optional callback
+contract, final-only persistence and sequence ordering, WebSocket readiness,
+audio and text validation, configuration/database/upstream/persistence errors,
+client stop, shortened session timeout, and disconnect cleanup. Tests do not
+call Gemini or other external network services and use fake Gemini sessions.
 
 To run the optional PostgreSQL integration test, set a separate disposable test
 database:
@@ -347,6 +437,16 @@ Documented Live transcription limits:
   documented commands so the `backend` package root is on `sys.path`.
 - **`GEMINI_API_KEY is not set` / exit code 2:** Create `backend/.env` from
   `backend/.env.example` and add a real key, or set the environment variable.
+- **WebSocket `invalid_configuration` / close code 1008:** Set `GEMINI_API_KEY`
+  in `backend/.env` or the process environment. A missing database URL also
+  causes `database_unavailable` / close code 1011 before the ready message.
+- **WebSocket `invalid_audio` / close code 1007 or 1009:** Send even-length PCM16
+  frames no larger than 32,000 bytes. Send the exact text frame
+  `{"type":"stop"}` to finish.
+- **WebSocket `invalid_message` / close code 1003:** Only the stop text frame is
+  accepted; other text frames are rejected.
+- **Uvicorn reports no WebSocket implementation:** Install
+  `backend/requirements.txt`, which pins `websockets`.
 - **`No usable microphone at 16000 Hz...`:** Use `--list-devices`, make a
   supported microphone the Windows default, or pass a WAV/PCM file.
 - **Default microphone captures silence:** Use `--list-devices` and pass a

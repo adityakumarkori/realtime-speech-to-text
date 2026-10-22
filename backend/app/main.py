@@ -19,7 +19,9 @@ from app.config import (
 from app.database import Database
 from app.errors import register_exception_handlers
 from app.logging_config import configure_logging
+from app.live import LiveRunner, LiveTranscriptionRunner
 from app.routes.health import router as health_router
+from app.routes.transcription import router as transcription_router
 from app.services import TranscriptService
 
 APP_TITLE = "Real-time Speech-to-Text API"
@@ -41,6 +43,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 def create_app(
     settings: AppSettings | None = None,
     database_settings: DatabaseSettings | None = None,
+    live_runner: LiveRunner | None = None,
 ) -> FastAPI:
     resolved_settings = settings if settings is not None else load_app_settings()
     resolved_database_settings = (
@@ -56,8 +59,16 @@ def create_app(
     app.state.database = database
     app.state.transcript_service = TranscriptService(database)
 
+    if live_runner is None:
+        live_runner = LiveTranscriptionRunner(
+            transcript_service=app.state.transcript_service,
+            database=database,
+        )
+    app.state.live_runner = live_runner
+
     register_exception_handlers(app)
     app.include_router(health_router)
+    app.include_router(transcription_router)
 
     logger.info(
         "Starting %s in %s environment",
