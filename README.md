@@ -9,18 +9,27 @@ Docker, or long-term storage.
 
 ## Verification status
 
-Checked on 2026-10-22 on Windows 11 with Python 3.12.7:
+Checked on 2026-10-22 on Windows 11 with Python 3.12.7 and
+`google-genai==2.32.0`:
 
-- 36 offline tests pass, including a pinned-SDK contract test and a fake-session
-  orchestration test.
-- `google-genai==2.32.0` exposes every API field and method used here.
-- Microphone enumeration works on this machine.
-- Missing API key produces a clear error with exit code `2`.
-- **Live transcription is not yet verified.** No `GEMINI_API_KEY` was supplied,
-  so no Live API request was made.
-- **Hinglish/code-switching accuracy is not yet verified.** Use automatic
-  language detection for mixed Hindi-English speech and validate with your own
-  audio.
+- 39 offline tests pass, including a pinned-SDK contract test, a fake-session
+  orchestration test, and CLI device validation.
+- A Live API session was established with `gemini-3.5-transcribe-live`.
+- The live microphone pipeline succeeded using device 2, the External
+  Microphone (Realtek), with synthetic English text-to-speech played through
+  the speakers: 28 interim updates, 3 finalized segments, exit code `0`.
+- A synthetic English WAV file produced 19 interim updates and 1 finalized
+  segment, exit code `0`.
+- The default Intel microphone array captured no usable audio; `--device 2` was
+  required on this machine.
+- **Human-spoken English, Hindi, and Hinglish were not tested.** Hindi and
+  Hinglish accuracy remain unverified.
+- The documented 10-minute session limit was not exercised.
+- Missing API key still produces a clear error with exit code `2`.
+
+Phase 0 is verified for the Live API and microphone pipeline, but not fully
+verified for human multilingual use. No audio or transcript content was
+written to the repository.
 
 ## Requirements
 
@@ -72,7 +81,15 @@ detection:
 .\.venv\Scripts\python.exe backend\scripts\test_gemini_live.py --input mic --seconds 30
 ```
 
-Stream until `Ctrl+C` (or the 10-minute session limit):
+If the default microphone is silent, select an index printed by
+`--list-devices`:
+
+```powershell
+.\.venv\Scripts\python.exe backend\scripts\test_gemini_live.py --input mic --device 2 --seconds 30
+```
+
+`--device` is valid only with microphone input. Stream until `Ctrl+C` (or the
+10-minute session limit):
 
 ```powershell
 .\.venv\Scripts\python.exe backend\scripts\test_gemini_live.py --seconds 0
@@ -151,10 +168,10 @@ depends on automatic detection and must be tested with representative audio.
 ```
 
 The suite covers configuration validation and redaction, WAV/PCM validation,
-chunking, transcript event extraction, fake-session orchestration, and the
-installed `google-genai` contract (version, config fields, response fields,
-send/receive methods, and async client context management). Tests do not call
-the network.
+chunking, transcript event extraction, fake-session orchestration, CLI device
+validation, and the installed `google-genai` contract (version, config fields,
+response fields, send/receive methods, and async client context management).
+Tests do not call the network.
 
 ## Limits and cost
 
@@ -180,6 +197,9 @@ Documented Live transcription limits:
   `backend/.env.example` and add a real key, or set the environment variable.
 - **`No usable microphone at 16000 Hz...`:** Use `--list-devices`, make a
   supported microphone the Windows default, or pass a WAV/PCM file.
+- **Default microphone captures silence:** Use `--list-devices` and pass a
+  working input with `--device INDEX`. On the verification machine the default
+  Intel array was silent and device `2` was used.
 - **No finalized transcript / exit code 1:** Check that speech is audible,
   stream for longer, verify credentials and quota, and retry with `--debug`.
 - **Install timeouts:** Retry pip. If PyPI remains unreachable, use a trusted

@@ -42,6 +42,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="'mic', a 16 kHz mono PCM16 .wav file, or a raw .pcm file.",
     )
     parser.add_argument(
+        "--device",
+        type=int,
+        default=None,
+        metavar="INDEX",
+        help="Microphone device index from --list-devices (microphone only).",
+    )
+    parser.add_argument(
         "--language",
         default="auto",
         help=(
@@ -85,6 +92,10 @@ def _validate_args(args: argparse.Namespace) -> None:
         raise ConfigurationError(
             "--flush-timeout must be zero or a positive number."
         )
+    if args.device is not None and args.device < 0:
+        raise ConfigurationError("--device must be zero or a positive integer.")
+    if args.device is not None and args.input.lower() != "mic":
+        raise ConfigurationError("--device is only valid with --input mic.")
 
 
 async def _run(args: argparse.Namespace) -> int:
@@ -102,13 +113,19 @@ async def _run(args: argparse.Namespace) -> int:
     language_codes = parse_language_codes(args.language)
 
     if args.input.lower() == "mic":
-        check_microphone()
+        check_microphone(args.device)
+        device_note = (
+            f" on device {args.device}" if args.device is not None else ""
+        )
         print(
-            "Speak into the microphone. "
+            f"Speak into the microphone{device_note}. "
             f"Streaming for {args.seconds or MAX_SESSION_SECONDS:.0f}s.",
             flush=True,
         )
-        chunks = microphone_chunks(max_seconds=args.seconds)
+        chunks = microphone_chunks(
+            max_seconds=args.seconds,
+            device=args.device,
+        )
     else:
         audio = load_audio(Path(args.input))
         print(
