@@ -160,4 +160,13 @@ describe('buildWebSocketUrl', () => {
       buildWebSocketUrl({ override: 'https://example.test' }),
     ).toThrow(ProtocolError)
   })
+
+  it('rejects ws:// overrides on HTTPS pages', () => {
+    expect(() =>
+      buildWebSocketUrl({
+        override: 'ws://api.example.test',
+        location: { protocol: 'https:', host: 'app.example.test' },
+      }),
+    ).toThrow(ProtocolError)
+  })
 })

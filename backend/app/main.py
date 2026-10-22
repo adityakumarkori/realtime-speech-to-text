@@ -4,7 +4,10 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import RequestResponseEndpoint
+from starlette.responses import Response
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
@@ -66,6 +69,37 @@ def create_app(
             database=database,
         )
     app.state.live_runner = live_runner
+
+    if resolved_settings.cors_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=list(resolved_settings.cors_origins),
+            allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+            allow_headers=["Accept", "Content-Type"],
+            max_age=600,
+        )
+    elif resolved_settings.environment == "production":
+        logger.warning(
+            "CORS_ORIGINS is not set; a separately hosted frontend will be "
+            "blocked by the browser."
+        )
+
+    @app.middleware("http")
+    async def add_security_headers(
+        request: Request,
+        call_next: RequestResponseEndpoint,
+    ) -> Response:
+        response = await call_next(request)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        response.headers.setdefault(
+            "Strict-Transport-Security",
+            "max-age=31536000",
+        )
+        if request.url.path.startswith("/api"):
+            response.headers.setdefault("Cache-Control", "no-store")
+        return response
 
     register_exception_handlers(app)
     app.include_router(health_router)

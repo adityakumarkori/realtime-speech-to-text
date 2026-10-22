@@ -3,6 +3,7 @@ import {
   startAudioCapture,
   type AudioCaptureHandle,
 } from '../audio/capture'
+import { websocketUrlOverride } from '../lib/backend'
 import {
   buildWebSocketUrl,
   parseServerMessage,
@@ -229,7 +230,7 @@ export function useTranscription(): TranscriptionController {
       let url: string
       try {
         url = buildWebSocketUrl({
-          override: import.meta.env.VITE_WS_URL,
+          override: websocketUrlOverride(),
           languageCodes,
         })
       } catch (error) {

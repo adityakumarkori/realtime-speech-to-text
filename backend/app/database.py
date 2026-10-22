@@ -34,7 +34,11 @@ class Database:
             )
             return
 
-        self._engine = create_engine(self._settings.url, pool_pre_ping=True)
+        self._engine = create_engine(
+            self._settings.url,
+            pool_pre_ping=True,
+            pool_recycle=300,
+        )
         self._session_factory = sessionmaker(
             bind=self._engine,
             expire_on_commit=False,

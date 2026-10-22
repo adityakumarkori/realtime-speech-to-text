@@ -76,7 +76,54 @@ def test_invalid_log_level_is_rejected(tmp_path, value):
 
 def test_app_settings_do_not_contain_credentials():
     field_names = {item.name for item in fields(AppSettings)}
-    assert field_names == {"environment", "log_level"}
+    assert field_names == {"environment", "log_level", "cors_origins"}
+
+
+def test_cors_origins_are_parsed_and_normalized(tmp_path):
+    settings = load_app_settings(
+        env_file=tmp_path / "missing.env",
+        environ={
+            "CORS_ORIGINS": (
+                " HTTPS://APP.EXAMPLE.TEST:443/ , "
+                "http://127.0.0.1:5173,https://app.example.test "
+            )
+        },
+    )
+
+    assert settings.cors_origins == (
+        "https://app.example.test",
+        "http://127.0.0.1:5173",
+    )
+
+
+def test_blank_cors_origins_are_empty(tmp_path):
+    settings = load_app_settings(
+        env_file=tmp_path / "missing.env",
+        environ={"CORS_ORIGINS": "  ,  "},
+    )
+
+    assert settings.cors_origins == ()
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "app.example.test",
+        "ftp://app.example.test",
+        "https://app.example.test/api",
+        "https://user:secret@app.example.test",
+        "https://app.example.test?debug=1",
+        "https://app.example.test#section",
+        "https://app.example.test:notaport",
+        "http://[::1",
+    ],
+)
+def test_invalid_cors_origins_are_rejected(tmp_path, value):
+    with pytest.raises(AppConfigurationError, match="CORS_ORIGINS"):
+        load_app_settings(
+            env_file=tmp_path / "missing.env",
+            environ={"CORS_ORIGINS": value},
+        )
 
 
 def test_database_url_defaults_to_unconfigured(tmp_path):

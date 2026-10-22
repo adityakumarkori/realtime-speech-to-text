@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   ApiError,
   deleteSession,
@@ -14,7 +14,13 @@ function jsonResponse(body: unknown, status = 200): Response {
   })
 }
 
+beforeEach(() => {
+  vi.stubEnv('VITE_BACKEND_URL', '')
+  vi.stubEnv('VITE_WS_URL', '')
+})
+
 afterEach(() => {
+  vi.unstubAllEnvs()
   vi.unstubAllGlobals()
 })
 
@@ -38,6 +44,35 @@ describe('history API client', () => {
       expect.objectContaining({ method: 'GET' }),
     )
     expect(result.total).toBe(0)
+  })
+
+  it('prefixes requests with the configured backend URL', async () => {
+    vi.stubEnv('VITE_BACKEND_URL', 'https://api.example.test')
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ sessions: [], total: 0, limit: 5, offset: 0 }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await listSessions({ limit: 5 })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://api.example.test/api/transcription-sessions?limit=5&offset=0',
+      expect.anything(),
+    )
+  })
+
+  it('reports an invalid backend URL without calling fetch', async () => {
+    vi.stubEnv('VITE_BACKEND_URL', 'not-a-url')
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(listSessions()).rejects.toMatchObject({
+      status: 0,
+      message: 'VITE_BACKEND_URL must be a valid http:// or https:// URL.',
+    })
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('omits an empty search query', async () => {

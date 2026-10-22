@@ -183,6 +183,13 @@ async def websocket_transcribe(
     websocket: WebSocket,
     language_codes: str = Query(default="auto", alias="language_codes"),
 ) -> None:
+    allowed_origins = websocket.app.state.settings.cors_origins
+    origin = websocket.headers.get("origin")
+    if allowed_origins and origin is not None and origin not in allowed_origins:
+        logger.warning("Rejected WebSocket connection from an unknown origin")
+        await websocket.close(code=1008)
+        return
+
     await websocket.accept()
     session_id = uuid.uuid4()
     session_id_str = str(session_id)

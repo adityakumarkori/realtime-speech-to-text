@@ -177,6 +177,14 @@ export function buildWebSocketUrl(options: WebSocketUrlOptions = {}): string {
     if (url.protocol !== 'ws:' && url.protocol !== 'wss:') {
       throw new ProtocolError('VITE_WS_URL must use the ws:// or wss:// scheme.')
     }
+    const location =
+      options.location ??
+      (typeof window === 'undefined' ? undefined : window.location)
+    if (url.protocol === 'ws:' && location?.protocol === 'https:') {
+      throw new ProtocolError(
+        'The WebSocket URL must use wss:// on HTTPS pages.',
+      )
+    }
     if (!url.pathname.endsWith('/ws/transcribe')) {
       const basePath = url.pathname.replace(/\/+$/, '')
       url.pathname = `${basePath}/ws/transcribe`
