@@ -1,11 +1,17 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   apiUrl,
   normalizeBackendUrl,
   websocketUrlOverride,
 } from './backend'
 
+beforeEach(() => {
+  vi.stubEnv('VITE_BACKEND_URL', '')
+  vi.stubEnv('VITE_WS_URL', '')
+})
+
 afterEach(() => {
+  vi.unstubAllEnvs()
   vi.unstubAllGlobals()
 })
 

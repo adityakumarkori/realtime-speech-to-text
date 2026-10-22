@@ -128,8 +128,9 @@ Copy-Item frontend\.env.example frontend\.env
 npm --prefix frontend install
 ```
 
-`frontend/.env` is optional for local development. Leave `VITE_BACKEND_URL`
-blank to use the Vite proxy, or set it to the deployed backend origin.
+`frontend/.env` is optional for local development. The copied example points at
+`http://127.0.0.1:8000`; leave `VITE_BACKEND_URL` blank to use the Vite proxy, or
+replace it with the deployed backend origin when the apps are hosted separately.
 
 Edit `backend/.env` and replace the Gemini placeholder. Uncomment and set
 `DATABASE_URL` to enable transcript persistence:
