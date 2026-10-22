@@ -2,6 +2,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Mapping
+from urllib.parse import urlsplit
 
 from dotenv import dotenv_values
 from sqlalchemy.engine import make_url
@@ -26,6 +27,7 @@ class AppConfigurationError(ValueError):
 class AppSettings:
     environment: str = DEFAULT_ENVIRONMENT
     log_level: str = DEFAULT_LOG_LEVEL
+    cors_origins: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -55,6 +57,47 @@ def _load_values(
     return values
 
 
+def _parse_cors_origins(value: str) -> tuple[str, ...]:
+    origins: list[str] = []
+    for raw_origin in value.split(","):
+        candidate = raw_origin.strip().rstrip("/")
+        if not candidate:
+            continue
+
+        try:
+            parts = urlsplit(candidate)
+            port = parts.port
+        except ValueError:
+            parts = None
+            port = None
+        if (
+            parts is None
+            or parts.scheme not in ("http", "https")
+            or not parts.netloc
+            or parts.username
+            or parts.password
+            or parts.path
+            or parts.query
+            or parts.fragment
+        ):
+            raise AppConfigurationError(
+                "CORS_ORIGINS entries must be absolute http:// or https:// "
+                "origins without paths, credentials, queries, or fragments."
+            )
+
+        hostname = parts.hostname or ""
+        host = f"[{hostname}]" if ":" in hostname else hostname
+        default_port = 443 if parts.scheme == "https" else 80
+        if port is not None and port != default_port:
+            host = f"{host}:{port}"
+
+        origin = f"{parts.scheme}://{host}"
+        if origin not in origins:
+            origins.append(origin)
+
+    return tuple(origins)
+
+
 def load_app_settings(
     env_file: Path | None = None,
     environ: Mapping[str, str] | None = None,
@@ -74,7 +117,13 @@ def load_app_settings(
             f"LOG_LEVEL must be one of: {allowed}."
         )
 
-    return AppSettings(environment=environment, log_level=log_level)
+    cors_origins = _parse_cors_origins(values.get("CORS_ORIGINS") or "")
+
+    return AppSettings(
+        environment=environment,
+        log_level=log_level,
+        cors_origins=cors_origins,
+    )
 
 
 def load_database_settings(

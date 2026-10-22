@@ -1,3 +1,5 @@
+import { apiUrl } from '../lib/backend'
+
 export interface TranscriptSegment {
   id: string
   session_id: string
@@ -70,9 +72,21 @@ async function request<T>(
     init.body = JSON.stringify(options.body)
   }
 
+  let url: string
+  try {
+    url = apiUrl(path)
+  } catch (error) {
+    throw new ApiError(
+      0,
+      error instanceof Error
+        ? error.message
+        : 'The backend URL is invalid.',
+    )
+  }
+
   let response: Response
   try {
-    response = await fetch(path, init)
+    response = await fetch(url, init)
   } catch {
     throw new ApiError(0, 'Could not reach the transcription service.')
   }

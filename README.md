@@ -16,8 +16,9 @@ searching, viewing, editing, and deleting finalized transcription sessions.
 The project has no authentication or Docker setup. The Phase 0 CLI and the
 WebSocket endpoint both use Gemini Live. The WebSocket endpoint persists final
 segments; the dashboard reads, edits, and deletes them through the REST API.
-The Phase 0 CLI does not write to the database. The REST API is intended for
-local development and must not be exposed to untrusted networks.
+The Phase 0 CLI does not write to the database. The REST API is unauthenticated:
+expose it only to trusted users, and add authentication before handling sensitive
+content or exposing it to untrusted networks.
 
 ## Verification status
 
@@ -26,7 +27,7 @@ Checked on 2026-10-22 on Windows 11 with Python 3.12.7,
 `psycopg==3.3.6`, `alembic==1.20.1`, `websockets==16.1.1`, Node.js 24.14.0,
 npm 11.9.0, React 19.3.1, Vite 8.3.5, TypeScript 6.0.3, and Vitest 4.1.12:
 
-- 125 backend tests pass, covering the Phase 0 pipeline, a pinned-SDK contract
+- 144 backend tests pass, covering the Phase 0 pipeline, a pinned-SDK contract
   test, a fake-session orchestration test, CLI device validation, Phase 1 app
   configuration, health, and error behavior, Phase 2 persistence and
   migrations, Phase 3 WebSocket streaming, and the Phase 5 history API.
@@ -51,12 +52,18 @@ npm 11.9.0, React 19.3.1, Vite 8.3.5, TypeScript 6.0.3, and Vitest 4.1.12:
   configured, an additional PostgreSQL
   test exercises session summaries, search, editing, and deletion against a
   temporary schema; otherwise it is skipped.
-- 54 frontend Vitest tests pass, covering PCM16 conversion and clipping,
+- Configuration and app-level CORS tests cover `CORS_ORIGINS` parsing and
+  validation, allowed and unknown origins, preflight methods and headers, the
+  WebSocket browser-origin check, cache and security headers, and the
+  unconfigured no-CORS behavior.
+- 71 frontend Vitest tests pass, covering PCM16 conversion and clipping,
   resampling from 8 kHz, 32 kHz, 44.1 kHz, and 48 kHz, exact frame construction,
   partial and multi-frame buffering, WebSocket message parsing, malformed
-  messages, URL construction, session transitions, final ordering, errors,
-  the history API client, and dashboard list/detail/search/edit/delete,
-  in-app confirmation cancel/confirm, and completion-refresh flows.
+  messages, URL construction, `VITE_BACKEND_URL` validation, HTTPS mixed-content
+  guards, REST/WebSocket derivation, session transitions, final ordering,
+  errors, the history API client, and dashboard
+  list/detail/search/edit/delete, in-app confirmation cancel/confirm, and
+  completion-refresh flows.
 - `npm run build` completes with TypeScript checks and a production Vite build.
 - The Vite development server returned the page with HTTP 200. `GET /health`
   returned `{"status":"ok"}` both directly and through the Vite `/health` proxy.
@@ -117,8 +124,13 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt -r backend\requirements-dev.txt
 Copy-Item backend\.env.example backend\.env
+Copy-Item frontend\.env.example frontend\.env
 npm --prefix frontend install
 ```
+
+`frontend/.env` is optional for local development. The copied example points at
+`http://127.0.0.1:8000`; leave `VITE_BACKEND_URL` blank to use the Vite proxy, or
+replace it with the deployed backend origin when the apps are hosted separately.
 
 Edit `backend/.env` and replace the Gemini placeholder. Uncomment and set
 `DATABASE_URL` to enable transcript persistence:
@@ -250,14 +262,17 @@ Error codes include `invalid_configuration`, `database_unavailable`,
 `invalid_message`, `invalid_audio`, `upstream_error`, `persistence_error`, and
 `internal_error`. Normal completion closes with 1000; invalid configuration uses
 1008, invalid messages 1003, invalid audio 1007 or 1009, and server-side
-database/upstream/persistence failures 1011. The endpoint is unauthenticated and
-is intended only for local development; bind it to `127.0.0.1` and do not expose
-it to untrusted networks. Audio and transcript content are not logged.
+database/upstream/persistence failures 1011. The endpoint is unauthenticated.
+For local development, bind it to `127.0.0.1`; for a public deployment, use
+HTTPS/`wss://` and add authentication before exposing it to untrusted networks.
+When `CORS_ORIGINS` is set, browser WebSocket handshakes from other origins are
+rejected with close code 1008; clients without an `Origin` header are allowed.
+Audio and transcript content are not logged.
 
 ## Transcription history API (Phase 5)
 
-These unauthenticated endpoints are intended for local development. They require
-a configured `DATABASE_URL`; otherwise they return HTTP 503 with
+These endpoints are unauthenticated and should be exposed only to trusted users.
+They require a configured `DATABASE_URL`; otherwise they return HTTP 503 with
 `{"detail":"Database unavailable"}`. Missing sessions or segments return HTTP
 404, invalid UUIDs and invalid query or body values return HTTP 422, and
 unexpected failures return the generic HTTP 500 response.
@@ -340,8 +355,9 @@ Invoke-RestMethod -Method Delete `
   "http://127.0.0.1:8000/api/transcription-sessions/$sessionId"
 ```
 
-Deleting a session is permanent. Do not expose this API to untrusted networks
-or use it against a database shared with other users.
+Deleting a session is permanent. When deployed, place the API behind
+authentication and access controls; do not expose it to untrusted networks or use
+it against a database shared with other users.
 
 ## Frontend (Phases 4-5)
 
@@ -359,7 +375,7 @@ the ordered final segments for a selected session. Segments can be edited in
 place, and a session can be deleted after an in-app confirmation dialog (not a
 browser alert). Completing a live session refreshes the history data without a
 full page reload. List, detail, edit, and delete requests use the `/api`
-endpoints documented above.
+endpoints documented above, prefixed with `VITE_BACKEND_URL` when it is set.
 
 Start the backend first in one terminal (see above), with `DATABASE_URL` and
 `GEMINI_API_KEY` configured. Then start the frontend in a second terminal:
@@ -368,23 +384,31 @@ Start the backend first in one terminal (see above), with `DATABASE_URL` and
 npm --prefix frontend run dev
 ```
 
-Open `http://127.0.0.1:5173`. The Vite development server proxies `/health` and
-`/api` to `http://127.0.0.1:8000` and `/ws` to `ws://127.0.0.1:8000`, so the
-browser uses the same origin and no backend CORS configuration is required. The
-microphone requires a secure context; `localhost` and `127.0.0.1` are treated as
-secure. Restart the Vite server after changing `vite.config.ts`.
+Open `http://127.0.0.1:5173`. When `VITE_BACKEND_URL` is unset, the Vite
+development server proxies `/health` and `/api` to `http://127.0.0.1:8000` and
+`/ws` to `ws://127.0.0.1:8000`, so the browser uses the same origin and no
+backend CORS configuration is required. The microphone requires a secure
+context; `localhost` and `127.0.0.1` are treated as secure. Restart the Vite
+server after changing `vite.config.ts` or frontend environment files.
 
-To use a different backend address, create `frontend/.env.local` (ignored by
-Git) and set the optional WebSocket base URL:
+For a separately hosted backend, set `VITE_BACKEND_URL` in `frontend/.env`
+(ignored by Git), `frontend/.env.local`, or the deployment environment:
 
 ```dotenv
-VITE_WS_URL=ws://127.0.0.1:8000
+VITE_BACKEND_URL=https://your-backend.onrender.com
 ```
 
-`VITE_WS_URL` must use `ws://` or `wss://`. The frontend appends
-`/ws/transcribe` when the override does not already end with that path. It is a
-public endpoint address, not a credential; do not put API keys in frontend
-environment variables.
+`VITE_BACKEND_URL` must be an `http://` or `https://` origin with no path,
+query, or credentials. The frontend uses it for `/api` REST requests and derives
+`ws://` or `wss://` for `/ws/transcribe`. When the backend is served over HTTPS,
+the WebSocket uses `wss://` automatically. `VITE_WS_URL` remains available as an
+explicit WebSocket-only override using `ws://` or `wss://`; it takes precedence
+over the URL derived from `VITE_BACKEND_URL`. Both values are public
+configuration, not credentials; do not put API keys in frontend environment
+variables. Vite embeds `VITE_BACKEND_URL` at build time, so rebuild or redeploy
+the frontend after changing it. When calling a local backend directly, also set
+`CORS_ORIGINS=http://127.0.0.1:5173` (or `http://localhost:5173`) in
+`backend/.env` and restart the backend.
 
 Language options map to the existing `language_codes` query parameter:
 
@@ -417,7 +441,8 @@ npm --prefix frontend run preview
 The production build is written to `frontend/dist/`. `npm run preview` uses the
 same proxy configuration. History is loaded from the backend REST API; the
 frontend does not persist transcripts in browser storage or authenticate users.
-The API and frontend are intended for local development only.
+The deployment described below is also unauthenticated; limit it to trusted users
+or demos until authentication is added.
 
 The application package is organized as:
 
@@ -445,6 +470,7 @@ frontend/
   src/api/history.ts           typed history REST client and error mapping
   src/audio/capture.ts         microphone, AudioContext, worklet cleanup
   src/history/HistoryDashboard.tsx history list, search, detail, edit, delete
+  src/lib/backend.ts           backend URL validation and API/WebSocket derivation
   src/lib/pcm.ts               PCM16 conversion, resampling, 100 ms framing
   src/lib/protocol.ts          typed WebSocket messages and URL construction
   src/session/sessionState.ts  pure session reducer and final ordering
@@ -460,6 +486,72 @@ returns HTTP 503 if a database-backed HTTP operation reaches a request. WebSocke
 errors use the JSON envelope documented above. The server logs the HTTP method
 and path, but not request bodies, audio frames, transcript text, credentials,
 database URLs, or provider response bodies.
+
+## Separate deployment (Render + Vercel)
+
+The frontend and backend can be hosted independently. The frontend reads the
+backend origin from `VITE_BACKEND_URL` at build time, and the backend allows the
+frontend origin through `CORS_ORIGINS`.
+
+### Backend on Render
+
+Create a PostgreSQL instance and a Python web service from this repository, then
+configure the service:
+
+- Root Directory: `backend`
+- Build Command: `pip install -r requirements.txt`
+- Start Command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+- Pre-Deploy Command: `alembic -c alembic.ini upgrade head`
+- Health Check Path: `/health`
+
+Set these environment variables in the Render dashboard:
+
+```dotenv
+APP_ENV=production
+LOG_LEVEL=INFO
+GEMINI_API_KEY=your_real_key_here
+GEMINI_LIVE_MODEL=gemini-3.5-transcribe-live
+DATABASE_URL=postgresql+psycopg://user:password@host:5432/database
+CORS_ORIGINS=https://your-frontend.vercel.app
+```
+
+Render provides a PostgreSQL URL that starts with `postgresql://`. Change the
+scheme to `postgresql+psycopg://` because the app uses psycopg 3. If your Render
+plan does not support pre-deploy commands, run
+`alembic -c alembic.ini upgrade head` once from the Render Shell before the first
+session. Do not commit these values or put them in the frontend. Confirm
+`https://<service>.onrender.com/health` returns `{"status":"ok"}` before
+deploying the frontend.
+
+### Frontend on Vercel
+
+Import this repository and configure the deployment:
+
+- Root Directory: `frontend`
+- Framework Preset: `Vite`
+- Build Command: `npm run build`
+- Output Directory: `dist`
+- Environment Variable: `VITE_BACKEND_URL=https://<service>.onrender.com`
+
+Deploy and open the Vercel URL over HTTPS. Browsers require a secure context for
+microphone access. Add the exact frontend origin to Render's `CORS_ORIGINS`; add
+every origin you use, including Vercel preview domains. `CORS_ORIGINS` accepts a
+comma-separated list of origins without paths or wildcards.
+
+Changing `VITE_BACKEND_URL` requires a new frontend build because Vite embeds it
+in the generated assets. WebSocket traffic uses `wss://` automatically when the
+backend URL starts with `https://`.
+
+### Production checklist
+
+- Set `APP_ENV=production` and an appropriate `LOG_LEVEL`.
+- Serve both apps over HTTPS so microphone access and `wss://` work.
+- Set `CORS_ORIGINS` to the exact frontend origin or origins.
+- Run the Alembic migration before the first session.
+- Keep `GEMINI_API_KEY` and `DATABASE_URL` only in backend/Render settings.
+- Confirm `/health` returns `{"status":"ok"}` and the history API works.
+- Add authentication and access controls before exposing transcript data to
+  untrusted users. The app does not provide authentication.
 
 ## Database migrations
 
@@ -573,16 +665,28 @@ transcripts, then closes the session and microphone stream.
 | --- | --- | --- | --- |
 | `APP_ENV` | FastAPI app | No | `development` |
 | `LOG_LEVEL` | FastAPI app | No | `INFO` |
+| `CORS_ORIGINS` | FastAPI app | No | Empty (no cross-origin browser access) |
 | `DATABASE_URL` | FastAPI app, `/ws/transcribe`, and Alembic | No for startup; yes for streaming and migrations | None |
 | `TEST_DATABASE_URL` | PostgreSQL tests | No; yes to run them | None |
 | `GEMINI_API_KEY` | Phase 0 CLI and `/ws/transcribe` | Yes for CLI and WebSocket sessions | None |
 | `GEMINI_LIVE_MODEL` | Phase 0 CLI and `/ws/transcribe` | No | `gemini-3.5-transcribe-live` |
-| `VITE_WS_URL` | Frontend WebSocket client | No | Vite proxy to `127.0.0.1:8000` |
+| `VITE_BACKEND_URL` | Frontend REST and WebSocket clients | No locally; yes for separate deployments | Vite proxy to `127.0.0.1:8000` |
+| `VITE_WS_URL` | Frontend WebSocket client (optional override) | No | Derived from `VITE_BACKEND_URL` |
 
 `APP_ENV` accepts `development`, `test`, or `production` and is normalized to
 lowercase. `LOG_LEVEL` accepts `CRITICAL`, `ERROR`, `WARNING`, `INFO`, or
 `DEBUG` and is normalized to uppercase. Invalid values stop startup with a
 clear configuration error.
+
+`CORS_ORIGINS` is a comma-separated list of absolute browser origins such as
+`https://your-frontend.vercel.app`. Entries must use `http://` or `https://`
+and must not include paths, credentials, queries, fragments, or wildcards. Leave
+it empty when the frontend uses the Vite development proxy or is served from the
+same origin as the backend. When it is set, the same list also restricts browser
+WebSocket origins; connections without an `Origin` header, such as native
+clients, are still allowed. The API also sends `X-Content-Type-Options`,
+`X-Frame-Options`, `Referrer-Policy`, and `Strict-Transport-Security` headers,
+and marks `/api` responses with `Cache-Control: no-store`.
 
 `DATABASE_URL` must use the installed psycopg driver, for example
 `postgresql+psycopg://user:password@host:5432/database`. A missing or blank
@@ -599,10 +703,12 @@ placeholder Gemini keys are rejected by the CLI before any network request and
 by `/ws/transcribe` with an `invalid_configuration` error. The FastAPI app starts
 without any Gemini setting, but transcription sessions require the key.
 
-Frontend settings are read by Vite from `frontend/.env.local` or the process
-environment. `VITE_WS_URL` is public configuration and must contain only a
-WebSocket endpoint, never a Gemini key or database credential. Without it, the
-frontend uses the Vite `/ws` proxy target (`ws://127.0.0.1:8000`).
+Frontend settings are read by Vite from `frontend/.env`, `frontend/.env.local`,
+or the process environment. `VITE_BACKEND_URL` is the public backend origin used
+for REST and WebSocket requests. `VITE_WS_URL` is an optional WebSocket-only
+override. Neither may contain a Gemini key or database credential. Without
+either value, development uses the Vite `/api` and `/ws` proxy targets
+(`127.0.0.1:8000`). Vite embeds these values at build time.
 
 Use `--language auto` (the default) to omit language hints and let the model
 detect language. `--language hi-IN,en-IN` supplies hints for Hindi and English
@@ -702,12 +808,24 @@ Documented Live transcription limits:
   `{"type":"stop"}` to finish.
 - **WebSocket `invalid_message` / close code 1003:** Only the stop text frame is
   accepted; other text frames are rejected.
-- **Frontend page returns a proxy or connection error:** Start the FastAPI
-  service on `127.0.0.1:8000` before using the Vite server on port 5173. The
-  development proxy does not start the backend automatically.
+- **WebSocket closes with code 1008 in production:** Add the exact frontend
+  origin to `CORS_ORIGINS` on the backend. The WebSocket browser-origin check
+  uses the same list as CORS.
+- **Frontend page returns a proxy or connection error:** With
+  `VITE_BACKEND_URL` unset, start the FastAPI service on `127.0.0.1:8000` before
+  using the Vite server on port 5173. The development proxy does not start the
+  backend automatically.
 - **History requests return 404 through the Vite server:** Restart Vite after
   changing `vite.config.ts` so the `/api` proxy is loaded. Vite may listen on
   `localhost` (including IPv6) rather than only `127.0.0.1`.
+- **Browser blocks history requests with a CORS error:** Set `CORS_ORIGINS` on
+  the backend to the exact frontend origin, including the scheme and port, and
+  restart or redeploy the backend. Add Vercel preview origins separately.
+- **Deployed frontend still calls the old backend:** `VITE_BACKEND_URL` is
+  embedded at build time. Update the Vercel environment variable and redeploy.
+- **WebSocket fails only in production:** Use an `https://` backend URL so the
+  frontend derives `wss://`. Mixed `http://` content is blocked on HTTPS pages,
+  and microphone access requires HTTPS outside localhost.
 - **Microphone permission denied or unavailable:** Allow microphone access in
   the browser, close other applications using the device, and use a browser with
   AudioWorklet support. Browsers require localhost or HTTPS for microphone
@@ -715,8 +833,12 @@ Documented Live transcription limits:
 - **`browser not supported` in the UI:** The page needs `getUserMedia`,
   AudioWorklet, and `AudioContext`. Update the browser or use a Chromium-based
   browser local to the machine.
-- **`VITE_WS_URL must use the ws:// or wss:// scheme`:** Correct the public
-  frontend environment value in `frontend/.env.local`; never place secrets there.
+- **`VITE_BACKEND_URL must be a valid http:// or https:// URL`:** Correct the
+  public frontend environment value in `frontend/.env`, `frontend/.env.local`,
+  or the deployment settings. Use only an origin, with no path or credentials.
+- **`VITE_WS_URL must use the ws:// or wss:// scheme`:** Correct the optional
+  WebSocket override, or remove it and set `VITE_BACKEND_URL` instead. Never
+  place secrets in frontend environment variables.
 - **Swagger does not show `/ws/transcribe`:** This is expected. `/health` and
   the `/api` history routes are listed, but WebSocket routes are not represented
   in OpenAPI.
