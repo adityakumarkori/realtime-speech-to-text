@@ -18,7 +18,7 @@ Checked on 2026-10-22 on Windows 11 with Python 3.12.7,
 `google-genai==2.32.0`, `fastapi==0.159.1`, `sqlalchemy==2.1.6`,
 `psycopg==3.3.6`, and `alembic==1.20.1`:
 
-- 80 tests pass, covering the Phase 0 pipeline, a pinned-SDK contract test, a
+- 81 tests pass, covering the Phase 0 pipeline, a pinned-SDK contract test, a
   fake-session orchestration test, CLI device validation, and Phase 1 app
   configuration, health, and error behavior.
 - Phase 2 tests cover database configuration, degraded startup, transcript
@@ -109,9 +109,8 @@ Start the service from the project root:
 ```
 
 From `backend`, use `python -m uvicorn app.main:app --reload`. From
-`backend/app`, use `python -m uvicorn app.main:app --app-dir .. --reload`. Do not
-use `main:app` from `backend/app`, because that directory is not the package
-root.
+`backend/app`, use `uvicorn main:app --reload` or
+`python -m uvicorn app.main:app --app-dir .. --reload`.
 
 In another shell, verify the endpoint:
 
@@ -344,8 +343,8 @@ Documented Live transcription limits:
 - **Database connection or migration failure:** Verify PostgreSQL is running,
   the URL uses `postgresql+psycopg://`, the database exists, and migrations have
   been applied.
-- **`ModuleNotFoundError: No module named 'app'`:** Start Uvicorn from the
-  project root or `backend`, not from `backend/app` with `main:app`.
+- **`ModuleNotFoundError: No module named 'app'`:** Start Uvicorn with the
+  documented commands so the `backend` package root is on `sys.path`.
 - **`GEMINI_API_KEY is not set` / exit code 2:** Create `backend/.env` from
   `backend/.env.example` and add a real key, or set the environment variable.
 - **`No usable microphone at 16000 Hz...`:** Use `--list-devices`, make a
